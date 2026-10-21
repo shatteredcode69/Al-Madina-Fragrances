@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1118">
+  <title>Al Madina Fragrances</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">✦</div>
+        <div><strong>Al Madina</strong><span>FRAGRANCES</span></div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-button" id="themeToggle" title="Toggle theme" aria-label="Toggle theme">☀</button>
+        <button class="secondary-button" id="exportCatalog" type="button">Export</button>
+        <button class="secondary-button" id="triggerImport" type="button">Import</button>
+        <button class="icon-button" id="resetCatalog" title="Restore official catalog" aria-label="Restore official catalog">↻</button>
+        <button class="primary-button" id="openAdd">＋ Add fragrance</button>
+      </div>
+      <input id="importInput" type="file" accept="application/json" hidden>
+    </header>
+
+    <main>
+      <section class="hero boutique-hero">
+        <div>
+          <p class="eyebrow">Private collection · 2025 edition</p>
+          <h1>A signature for<br><em>every story.</em></h1>
+          <p class="hero-copy">Your personal fragrance catalog, pricing desk, and stock companion — all in one place.</p>
+        </div>
+        <div class="hero-bottle" aria-hidden="true"><div class="bottle-cap"></div><div class="bottle-neck"></div><div class="bottle-body"><span>AMF</span></div></div>
+      </section>
+
+      <section class="metrics" aria-label="Catalog overview">
+        <article class="metric-card"><span class="metric-icon gold">◈</span><div><small>Total fragrances</small><strong id="totalCount">0</strong></div><span class="metric-note">in catalog</span></article>
+        <article class="metric-card"><span class="metric-icon rose">◇</span><div><small>Average / gram</small><strong id="averagePrice">0</strong></div><span class="metric-note">PKR</span></article>
+        <article class="metric-card"><span class="metric-icon green">✓</span><div><small>Price range</small><strong id="priceRange">0 — 0</strong></div><span class="metric-note">PKR / kg</span></article>
+      </section>
+
+      <section class="category-hero-panel" aria-label="Catalog collections">
+        <article class="collection-panel panel-gold" data-panel-filter="all">
+          <span class="panel-kicker">Signature</span>
+          <h3>House collection</h3>
+          <p>Curated master scents from the full Al Madina archive.</p>
+          <button type="button">Browse all</button>
+        </article>
+        <article class="collection-panel panel-slate" data-panel-filter="premium">
+          <span class="panel-kicker">Luxury</span>
+          <h3>Premium selection</h3>
+          <p>High-end signature blends and standout collector pieces.</p>
+          <button type="button">View premium</button>
+        </article>
+        <article class="collection-panel panel-rose" data-panel-filter="value">
+          <span class="panel-kicker">Daily wear</span>
+          <h3>Everyday value</h3>
+          <p>Elegant everyday options with refined scent profiles.</p>
+          <button type="button">Explore value</button>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="section-heading">
+          <div><p class="eyebrow">The collection</p><h2>Explore your scents</h2></div>
+          <div class="view-tools"><label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search name, code, or serial..." autocomplete="off"></label><select id="sort" aria-label="Sort catalog"><option value="no">Sort by number</option><option value="name">Name A–Z</option><option value="price">Price: low to high</option></select></div>
+        </div>
+        <div class="category-tabs"><button class="tab active" data-filter="all">All fragrances <b id="allCount">0</b></button><button class="tab" data-filter="premium">Premium <b>› 60k/kg</b></button><button class="tab" data-filter="value">Everyday value <b>‹ 40k/kg</b></button></div>
+        <div id="catalog" class="catalog-grid"></div>
+        <div id="emptyState" class="empty-state" hidden><div>⌕</div><h3>No fragrances found</h3><p>Try a different name, code, or serial number.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="detailModal" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle"><button class="modal-close" data-close>×</button><div id="detailContent"></div></div></div>
+  <div class="modal-backdrop" id="addModal" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="addTitle"><button class="modal-close" data-close>×</button><p class="eyebrow">New entry</p><h2 id="addTitle">Add a fragrance</h2><form id="addForm" class="form-grid"><label>Name / bilingual name<input name="name" required placeholder="e.g. Oud Marakoja عد ماراكوجا"></label><label>Code<input name="code" required placeholder="AMF-207"></label><label>Price / kg (PKR)<input name="priceKg" type="number" min="0" step="0.01" required></label><label>Price / gram<input name="perGram" type="number" min="0" step="0.01" required></label><label>Price / 25g<input name="price25g" type="number" min="0" step="0.01" required></label><label>Price / 100g<input name="price100g" type="number" min="0" step="0.01" required></label><button class="primary-button form-submit" type="submit">Add to collection</button></form></div></div>
+  <script src="src/data/catalog.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
