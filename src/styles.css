@@ -935,17 +935,185 @@ body[data-theme="light"] .form-grid input {
 }
 
 @media (max-width: 640px) {
-  .app-shell { padding: 0 18px 40px; }
-  .topbar { min-height: 76px; }
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    width: 100%;
+    padding: 0 16px 40px;
+  }
+
+  .topbar {
+    min-height: 0;
+    padding: 14px 0 16px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
   .brand strong { font-size: 1.6rem; }
   .brand span { letter-spacing: 0.2em; }
+
+  .header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
   .header-actions .icon-button { display: none; }
-  .primary-button { padding: 10px 12px; }
-  .hero { min-height: 260px; }
-  .hero-copy { font-size: 0.96rem; }
-  .view-tools { display: grid; grid-template-columns: 1fr; }
-  .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .fragrance-card { min-height: 181px; }
+  .header-actions > button { min-width: 0; }
+  .primary-button {
+    grid-column: 1 / -1;
+    padding: 11px 12px;
+  }
+  .secondary-button { padding: 10px 8px; }
+
+  .hero {
+    min-height: 340px;
+    display: block;
+    padding-top: 34px;
+  }
+
+  .hero > div:first-child {
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.65rem, 14vw, 4rem);
+  }
+
+  .hero-copy {
+    max-width: 100%;
+    font-size: 0.96rem;
+    line-height: 1.55;
+  }
+
+  .hero-bottle {
+    position: absolute;
+    right: -72px;
+    bottom: -30px;
+    width: 230px;
+    height: 230px;
+    opacity: 0.34;
+    transform: rotate(7deg) scale(0.82);
+  }
+
+  .metrics {
+    gap: 12px;
+    margin: 16px 0 22px;
+  }
+
+  .metric-card {
+    min-width: 0;
+    padding: 16px 14px;
+  }
+
+  .metric-card strong {
+    font-size: 1.8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .category-hero-panel {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .collection-panel {
+    min-height: 0;
+    padding: 20px 18px 16px;
+  }
+
+  .collection-panel h3 {
+    font-size: 1.8rem;
+  }
+
+  .workspace {
+    margin-top: 12px;
+  }
+
+  .section-heading h2 {
+    font-size: 2.35rem;
+  }
+
+  .view-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .search,
+  #sort {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .category-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-right: -16px;
+    padding-right: 16px;
+    scrollbar-width: none;
+  }
+
+  .category-tabs::-webkit-scrollbar { display: none; }
+
+  .catalog-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .fragrance-card {
+    min-height: 0;
+    padding: 16px;
+  }
+
+  .fragrance-card h3 {
+    min-height: 0;
+    margin: 18px 0 16px;
+    font-size: 1.12rem;
+  }
+
   .card-price strong { font-size: 1rem; }
   .form-grid { grid-template-columns: 1fr; }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 8px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 16px);
+    padding: 24px 18px 18px;
+    border-radius: 16px;
+  }
+
+  .price-table {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .detail-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 640px) {
+  .catalog-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fragrance-card {
+    padding: 14px;
+  }
+
+  .fragrance-card h3 {
+    font-size: 1rem;
+  }
 }
