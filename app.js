@@ -1,99 +1,115 @@
+/* global INITIAL_CATALOG */
 (() => {
-  const STORAGE_KEY = "amf-catalog-v1";
-  let catalog = loadCatalog();
-  let activeFilter = "all";
-  let selected = null;
-
-  const $ = (selector) => document.querySelector(selector);
-  const format = (value) => new Intl.NumberFormat("en-PK", { maximumFractionDigits: 2 }).format(value);
-  const persist = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(catalog));
-  function loadCatalog() {
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      return Array.isArray(stored) ? stored : [...window.INITIAL_CATALOG];
-    } catch {
-      return [...window.INITIAL_CATALOG];
-    }
-  }
-
-  function render() {
-    const query = $("#search").value.trim().toLowerCase();
-    const sort = $("#sort").value;
-    let items = catalog.filter((item) => {
-      const matchesQuery = !query || [item.name, item.code, item.no].some((value) => String(value).toLowerCase().includes(query));
-      const matchesFilter = activeFilter === "all" || (activeFilter === "premium" ? item.priceKg > 60000 : item.priceKg < 40000);
-      return matchesQuery && matchesFilter;
-    });
-    items.sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : sort === "price" ? a.priceKg - b.priceKg : Number.parseInt(a.no) - Number.parseInt(b.no));
-    $("#catalog").innerHTML = items.map(cardTemplate).join("");
-    $("#emptyState").hidden = items.length > 0;
-    $("#totalCount").textContent = catalog.length;
-    $("#allCount").textContent = catalog.length;
-    const average = catalog.reduce((sum, item) => sum + item.perGram, 0) / (catalog.length || 1);
-    $("#averagePrice").textContent = format(average);
-    const prices = catalog.map((item) => item.priceKg);
-    $("#priceRange").textContent = `${format(Math.min(...prices))} — ${format(Math.max(...prices))}`;
-  }
-
-  function cardTemplate(item) {
-    return `<article class="fragrance-card"><div class="card-top"><span>No. ${item.no}</span><span class="card-code">${escapeHtml(item.code)}</span></div><h3>${escapeHtml(item.name)}</h3><div class="card-price"><div><small>Per gram</small><strong>PKR ${format(item.perGram)}</strong></div><small>PKR ${format(item.priceKg)} / kg</small></div><div class="card-footer"><span>25g · ${format(item.price25g)}</span><button data-view="${item.id}">View details →</button></div></article>`;
-  }
-
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
-  }
-
-  function showDetail(item) {
-    selected = item;
-    $("#detailContent").innerHTML = `<div class="detail-header"><p class="eyebrow">Fragrance no. ${escapeHtml(item.no)}</p><h2 id="detailTitle">${escapeHtml(item.name)}</h2><span class="detail-code">Catalog code · ${escapeHtml(item.code)}</span></div><div class="price-table"><div class="price-cell"><small>Per gram</small><strong>PKR ${format(item.perGram)}</strong></div><div class="price-cell"><small>25 grams</small><strong>PKR ${format(item.price25g)}</strong></div><div class="price-cell"><small>100 grams</small><strong>PKR ${format(item.price100g)}</strong></div><div class="price-cell"><small>Per kilogram</small><strong>PKR ${format(item.priceKg)}</strong></div></div><div class="calculator"><div><p class="eyebrow">Quick calculator</p><strong>Price for your fill size</strong></div><label><span>Grams</span><input id="gramsInput" type="number" min="0" step="0.1" value="25"></label><output id="calculatedPrice">PKR ${format(item.perGram * 25)}</output></div><div class="detail-actions"><span>Prices from official AMF catalog</span><button class="danger" data-delete="${item.id}">Remove entry</button></div>`;
-    $("#detailModal").hidden = false;
-    $("#gramsInput").addEventListener("input", (event) => {
-      const grams = Math.max(0, Number(event.target.value) || 0);
-      $("#calculatedPrice").textContent = `PKR ${format(item.perGram * grams)}`;
-    });
-  }
-
-  function closeModals() {
-    $("#detailModal").hidden = true;
-    $("#addModal").hidden = true;
-    selected = null;
-  }
-
-  $("#search").addEventListener("input", render);
-  $("#sort").addEventListener("change", render);
-  document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
-    document.querySelector(".tab.active").classList.remove("active");
-    tab.classList.add("active");
-    activeFilter = tab.dataset.filter;
-    render();
+  const KEY = 'amf-store-v1';
+  const companies = [
+    { id: 'arabian', name: 'Arabian Perfumery', note: 'Made in Spain', color: '#cfad66' },
+    { id: 'company-2', name: 'Company 2', note: 'Add supplier details', color: '#91b5aa' },
+    { id: 'company-3', name: 'Company 3', note: 'Add supplier details', color: '#c98c83' },
+    { id: 'company-4', name: 'Company 4', note: 'Add supplier details', color: '#9e9ac7' }
+  ];
+  const seedProducts = (window.INITIAL_CATALOG || []).map((p, i) => ({
+    ...p, id: `arabian-${p.id || i + 1}`, companyId: 'arabian', serial: `AR-${String(p.no || i + 1).padStart(3, '0')}`,
+    size: p.size || '', stock: p.stock ?? 0, notes: p.notes || ''
   }));
-  $("#catalog").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-view]");
-    if (button) showDetail(catalog.find((item) => item.id === button.dataset.view));
+  const defaultState = {
+    settings: { name: 'Al Madina Fragrances', brand: 'Al Madina Fragrances (AMF)', phone: '', address: '', logo: '', theme: 'light' },
+    products: seedProducts, customers: [], orders: [],
+    companyMeta: Object.fromEntries(companies.map(c => [c.id, { name: c.name, note: c.note }]))
+  };
+  let state = load();
+  document.documentElement.dataset.theme = state.settings.theme || 'light';
+  let route = location.hash.slice(1) || '/dashboard';
+
+  function load() {
+    try { return { ...defaultState, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
+    catch { return structuredClone(defaultState); }
+  }
+  function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+  function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function money(n) { return `${Number(n || 0).toLocaleString()} PKR`; }
+  function company(id) { return companies.find(c => c.id === id) || companies[0]; }
+  function product(id) { return state.products.find(p => p.id === id); }
+  function customer(id) { return state.customers.find(c => c.id === id); }
+  function navigate(path) { location.hash = path; }
+  function toast(message) { const el = document.querySelector('#toast'); if (el) { el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2200); } }
+  function icon(symbol) { return `<span class="icon">${symbol}</span>`; }
+  function supplierOptions(selected = 'arabian') { return companies.map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(state.companyMeta[c.id]?.name || c.name)}</option>`).join(''); }
+  function productOptions(companyId = 'arabian', selected = '', query = '') { const needle = query.trim().toLowerCase(); return state.products.filter(p => p.companyId === companyId && (!needle || `${p.name} ${p.code} ${p.serial}`.toLowerCase().includes(needle))).map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)} · ${esc(p.serial)} · ${money(p.price25g)}/25g</option>`).join(''); }
+
+  function layout(content, active = 'dashboard') {
+    const logo = state.settings.logo ? `<img src="${state.settings.logo}" alt="${esc(state.settings.name)} logo">` : `<span class="logo-mark">AMF</span>`;
+    return `<div class="app"><aside class="sidebar"><a class="brand" href="#/dashboard">${logo}<span><b>Al Madina</b><small>FRAGRANCES</small></span></a>
+      <nav><small class="nav-label">Workspace</small>
+        ${nav('dashboard', '⌂', 'Overview', active)}${nav('catalog/arabian', '◈', 'Catalogs', active)}${nav('customers', '♙', 'Customers', active)}${nav('billing', '▤', 'Billing & invoices', active)}
+        <small class="nav-label">Manage</small>${nav('settings', '⚙', 'Settings', active)}
+      </nav><div class="sidebar-foot"><span class="status-dot"></span> Local & private<br><small>Data stays on this device</small></div></aside>
+      <main class="main"><header class="topbar"><div><span class="eyebrow">PERSONAL BUSINESS DESK</span><h1>${pageTitle()}</h1></div><div class="top-actions"><button class="button ghost theme-toggle" data-action="toggle-theme" aria-label="Switch to ${state.settings.theme === 'dark' ? 'light' : 'dark'} mode">${state.settings.theme === 'dark' ? '☼' : '◐'} <span>${state.settings.theme === 'dark' ? 'Light' : 'Dark'} mode</span></button><button class="button ghost" data-action="export-backup">Export backup</button><button class="button primary" data-action="quick-order">＋ New invoice</button></div></header>${content}</main><div id="toast" class="toast"></div></div>`;
+  }
+  function nav(path, sym, label, active) { return `<a class="${active === path.split('/')[0] ? 'active' : ''}" href="#/${path}">${icon(sym)}${label}</a>`; }
+  function pageTitle() { if (route.startsWith('/catalog')) return 'Supplier catalogs'; if (route.startsWith('/customers')) return 'Customers'; if (route.startsWith('/billing')) return 'Billing & invoices'; if (route.startsWith('/settings')) return 'Settings'; return 'Good evening'; }
+  function render() {
+    route = location.hash.slice(1) || '/dashboard';
+    let html, active = route.split('/')[1] || 'dashboard';
+    if (route === '/dashboard') html = dashboard();
+    else if (route.startsWith('/catalog/')) html = catalogPage(route.split('/')[2]);
+    else if (route === '/customers') html = customersPage();
+    else if (route.startsWith('/customers/')) html = customerPage(route.split('/')[2]);
+    else if (route === '/billing') html = billingPage();
+    else if (route === '/settings') html = settingsPage();
+    else html = dashboard();
+    document.querySelector('#app').innerHTML = layout(html, active);
+  }
+  function dashboard() {
+    const sold = state.orders.length, outstanding = state.orders.reduce((s, o) => s + (o.total - o.paid), 0);
+    const recent = [...state.orders].reverse().slice(0, 5);
+    return `<section class="hero"><div><span class="eyebrow">YOUR FRAGRANCE LEDGER</span><h2>Every scent,<br><em>beautifully accounted for.</em></h2><p>Manage your private collection, suppliers, customers and invoices in one calm workspace.</p><button class="button primary" data-action="quick-order">Create an invoice ${icon('→')}</button></div><div class="hero-art"><div class="bottle"><i></i><strong>AMF</strong><small>PERFUME</small></div></div></section>
+      <section class="stats"><article><span class="stat-icon gold">◈</span><small>Total fragrances</small><strong>${state.products.length}</strong><em>across ${companies.length} suppliers</em></article><article><span class="stat-icon sage">♙</span><small>Customers</small><strong>${state.customers.length}</strong><em>records saved locally</em></article><article><span class="stat-icon rose">▤</span><small>Invoices</small><strong>${sold}</strong><em>${money(outstanding)} outstanding</em></article></section>
+      <section class="split"><div class="panel"><div class="panel-head"><div><span class="eyebrow">SUPPLIERS</span><h3>Browse catalogs</h3></div><a href="#/catalog/arabian">View all →</a></div><div class="company-list">${companies.map(c => `<a class="company-row" href="#/catalog/${c.id}"><span class="company-avatar" style="--accent:${c.color}">${c.name[0]}</span><span><b>${esc(state.companyMeta[c.id]?.name || c.name)}</b><small>${state.products.filter(p => p.companyId === c.id).length} fragrances · ${esc(state.companyMeta[c.id]?.note || '')}</small></span>${icon('→')}</a>`).join('')}</div></div><div class="panel"><div class="panel-head"><div><span class="eyebrow">RECENT ACTIVITY</span><h3>Latest invoices</h3></div><a href="#/billing">See all →</a></div>${recent.length ? recent.map(o => `<a class="activity-row" href="#/billing"><span class="receipt">▤</span><span><b>${esc(o.number)}</b><small>${esc(o.customerName)}</small></span><strong>${money(o.total)}</strong></a>`).join('') : `<div class="empty-mini">${icon('◌')}<p>No invoices yet.<br>Create your first one above.</p></div>`}</div></section>`;
+  }
+  function catalogPage(cid) {
+    const c = company(cid), items = state.products.filter(p => p.companyId === cid);
+    return `<section class="catalog-toolbar"><div class="company-switcher">${companies.map(x => `<a class="${x.id === cid ? 'selected' : ''}" href="#/catalog/${x.id}"><span style="--accent:${x.color}">${x.name[0]}</span>${esc(state.companyMeta[x.id]?.name || x.name)} <b>${state.products.filter(p => p.companyId === x.id).length}</b></a>`).join('')}</div><button class="button primary" data-action="add-product" data-company="${cid}">＋ Add fragrance</button></section>
+      <section class="catalog-head"><div><span class="eyebrow">${esc(state.companyMeta[cid]?.note || c.note)}</span><h2>${esc(state.companyMeta[cid]?.name || c.name)}</h2><p>Prices and metrics are shown only inside this supplier catalog.</p></div><div class="catalog-tools"><label class="search">${icon('⌕')}<input id="product-search" placeholder="Search name, code or serial…"></label><button class="button ghost" data-action="export-catalog" data-company="${cid}">Export Excel</button></div></section>
+      <div id="product-grid" class="product-grid">${items.map(productCard).join('')}</div><div id="catalog-empty" class="empty-state" hidden>${icon('⌕')}<h3>No matching fragrances</h3><p>Try a different search or add a new fragrance.</p></div>`;
+  }
+  function productCard(p) { return `<article class="product-card" data-search="${esc(`${p.name} ${p.code} ${p.serial}`.toLowerCase())}" data-id="${p.id}"><button class="card-open" data-action="product-detail" data-id="${p.id}"><span class="product-no">${esc(p.serial)}</span><h3>${esc(p.name)}</h3><p>${esc(p.code)} · ${p.size ? esc(p.size) : 'Size not supplied'}</p><strong>${money(p.priceKg)} <small>/ kg</small></strong><div class="card-foot"><span>${money(p.price25g)} / 25g</span><span>${p.stock ? `${p.stock} in stock` : 'Stock not set'}</span></div></button></article>`; }
+  function customersPage() {
+    return `<section class="page-intro"><div><p>Every customer has a searchable key and a complete account history.</p></div><button class="button primary" data-action="add-customer">＋ Add customer</button></section><label class="search wide">${icon('⌕')}<input id="customer-search" placeholder="Search key, name, phone or address…"></label><div id="customer-grid" class="customer-grid">${state.customers.map(customerCard).join('')}</div><div class="empty-state" id="customer-empty" ${state.customers.length ? 'hidden' : ''}>${icon('♙')}<h3>No customers yet</h3><p>Add a customer to start recording orders.</p></div>`;
+  }
+  function customerCard(c) { const orders = state.orders.filter(o => o.customerId === c.id), balance = orders.reduce((s, o) => s + o.total - o.paid, 0); return `<a class="customer-card" href="#/customers/${c.id}" data-search="${esc(`${c.key} ${c.name} ${c.phone} ${c.address}`.toLowerCase())}"><span class="customer-avatar">${esc(c.name[0] || '?')}</span><div><span class="eyebrow">${esc(c.key)}</span><h3>${esc(c.name)}</h3><p>${esc(c.phone || 'No phone')} · ${esc(c.address || 'No address')}</p></div><div class="customer-total"><small>${orders.length} invoice${orders.length === 1 ? '' : 's'}</small><strong>${money(balance)}</strong><span>remaining</span></div></a>`; }
+  function customerPage(id) {
+    const c = customer(id); if (!c) return `<section class="empty-state">${icon('!')}<h3>Customer not found</h3></section>`;
+    const orders = state.orders.filter(o => o.customerId === id), total = orders.reduce((s, o) => s + o.total, 0), paid = orders.reduce((s, o) => s + o.paid, 0);
+    return `<a class="back-link" href="#/customers">← All customers</a><section class="profile-head"><span class="customer-avatar large">${esc(c.name[0])}</span><div><span class="eyebrow">${esc(c.key)}</span><h2>${esc(c.name)}</h2><p>${esc(c.phone || 'No phone')} · ${esc(c.address || 'No address')}</p></div><button class="button primary" data-action="quick-order" data-customer="${c.id}">＋ New invoice</button></section><section class="stats compact"><article><small>Total billed</small><strong>${money(total)}</strong></article><article><small>Paid</small><strong>${money(paid)}</strong></article><article><small>Remaining</small><strong>${money(total - paid)}</strong></article></section><section class="panel detail-panel"><div class="panel-head"><div><span class="eyebrow">ACCOUNT HISTORY</span><h3>Invoices & ordered products</h3></div><button class="button ghost" data-action="export-customer" data-id="${id}">Download record</button></div>${orders.length ? orders.map(orderRow).join('') : '<div class="empty-mini">No orders recorded for this customer.</div>'}</section>`;
+  }
+  function orderRow(o) { const canDelete = o.paid >= o.total; return `<div class="order-row"><span class="receipt">▤</span><div class="order-info"><b>${esc(o.number)}</b><small>${new Date(o.date).toLocaleDateString()} · ${o.items.length} item${o.items.length === 1 ? '' : 's'}</small></div><strong>${money(o.total)}</strong><span class="balance ${o.total - o.paid > 0 ? 'due' : ''}">${o.total - o.paid ? `${money(o.total - o.paid)} due` : 'Paid'}</span><span class="invoice-actions"><button class="button small ghost" data-action="edit-invoice" data-id="${o.id}">Edit</button><button class="button small ghost" data-action="invoice" data-id="${o.id}">Invoice</button>${canDelete ? '<button class="button small delete-icon" data-action="delete-invoice" data-id="' + o.id + '" aria-label="Delete paid invoice" title="Delete paid invoice">⌫</button>' : ''}</span></div>`; }
+  function billingPage() { return `<section class="page-intro"><div><p>One invoice can combine products from all four suppliers.</p></div><button class="button primary" data-action="quick-order">＋ New invoice</button></section><div class="panel detail-panel">${state.orders.length ? [...state.orders].reverse().map(orderRow).join('') : `<div class="empty-state">${icon('▤')}<h3>No billing records yet</h3><p>Create an invoice with products from any company.</p></div>`}</div>`; }
+  function settingsPage() { return `<section class="settings-grid"><div class="panel"><span class="eyebrow">BRAND & BUSINESS</span><h3>Customize your workspace</h3><form id="settings-form" class="form"><label>Shop name<input name="name" value="${esc(state.settings.name)}"></label><label>Invoice name<input name="brand" value="${esc(state.settings.brand)}"></label><label>Phone<input name="phone" value="${esc(state.settings.phone)}"></label><label>Address<textarea name="address">${esc(state.settings.address)}</textarea></label><label>Logo<input name="logo" type="file" accept="image/*"><small>Upload your shop logo. It updates the workspace and every invoice.</small></label><button class="button primary" type="submit">Save settings</button></form></div><div class="panel"><span class="eyebrow">APPEARANCE & DATA</span><h3>Keep your desk comfortable</h3><p class="muted">Switch between calm light and dark modes without changing your brand colors.</p><button class="button ghost" data-action="toggle-theme">${state.settings.theme === 'dark' ? '☼ Use light mode' : '◐ Use dark mode'}</button><hr><h3>Your records are local</h3><p class="muted">Everything is stored in this browser. Export a backup regularly so you can move your records to another device.</p><button class="button ghost" data-action="export-backup">Download JSON backup</button><hr><h3>Supplier names</h3><form id="companies-form" class="form">${companies.map(c => `<label>${c.id === 'arabian' ? 'Supplier 1' : c.id.replace('company-', 'Supplier ')}<input name="${c.id}" value="${esc(state.companyMeta[c.id]?.name || c.name)}"></label>`).join('')}<button class="button ghost" type="submit">Save supplier names</button></form></div></section>`; }
+
+  function openModal(html, cls = '') { const el = document.createElement('div'); el.className = `modal-backdrop ${cls}`; el.innerHTML = `<div class="modal">${html}<button class="modal-close" data-close>×</button></div>`; document.body.appendChild(el); return el; }
+  function productModal(id) { const p = product(id), c = company(p.companyId); openModal(`<span class="eyebrow">${esc(c.name)} · ${esc(p.serial)}</span><h2>${esc(p.name)}</h2><div class="detail-grid">${[['Supplier', c.name], ['Serial number', p.serial], ['Code', p.code], ['Price / kg', money(p.priceKg)], ['Price / gram', money(p.perGram)], ['Price / 25g', money(p.price25g)], ['Price / 100g', money(p.price100g)], ['Size / weight', p.size || 'Not supplied'], ['Stock', p.stock || 'Not set'], ['Notes', p.notes || '—']].map(x => `<div><small>${esc(x[0])}</small><strong>${esc(x[1])}</strong></div>`).join('')}</div><div class="modal-actions"><button class="button ghost" data-action="edit-product" data-id="${id}">Edit</button><button class="button danger" data-action="delete-product" data-id="${id}">Remove</button></div>`); }
+  function productForm(cid, id = '') { const p = id ? product(id) : {}; const modal = openModal(`<span class="eyebrow">${id ? 'EDIT FRAGRANCE' : 'NEW FRAGRANCE'}</span><h2>${id ? 'Update fragrance' : 'Add fragrance'}</h2><form id="product-form" class="form"><input type="hidden" name="id" value="${id}"><input type="hidden" name="companyId" value="${cid}"><label>Name / bilingual name<input name="name" required value="${esc(p.name)}"></label><label>Code<input name="code" required value="${esc(p.code)}"></label><label>Serial number<input name="serial" required value="${esc(p.serial || `${company(cid).name.slice(0, 2).toUpperCase()}-${String(state.products.length + 1).padStart(3, '0')}`)}"></label><div class="form-cols"><label>Price / kg<input name="priceKg" type="number" step="0.01" value="${p.priceKg || ''}"></label><label>Price / gram<input name="perGram" type="number" step="0.01" value="${p.perGram || ''}"></label></div><div class="form-cols"><label>Price / 25g<input name="price25g" type="number" step="0.01" value="${p.price25g || ''}"></label><label>Price / 100g<input name="price100g" type="number" step="0.01" value="${p.price100g || ''}"></label></div><div class="form-cols"><label>Size / weight<input name="size" value="${esc(p.size)}"></label><label>Stock<input name="stock" type="number" step="1" value="${p.stock || 0}"></label></div><label>Notes / supplied metrics<textarea name="notes">${esc(p.notes)}</textarea></label><button class="button primary" type="submit">${id ? 'Save changes' : 'Add fragrance'}</button></form>`); }
+  function customerForm() { openModal(`<span class="eyebrow">NEW CUSTOMER</span><h2>Add customer record</h2><form id="customer-form" class="form"><label>Customer key<input name="key" required placeholder="001-abbas"></label><label>Full name<input name="name" required></label><div class="form-cols"><label>Phone<input name="phone"></label><label>Account number<input name="account"></label></div><label>Address<textarea name="address"></textarea></label><button class="button primary" type="submit">Save customer</button></form>`); }
+  function invoiceLineHtml(companyId = 'arabian', productId = '') { return `<div class="invoice-line"><select name="companyId" aria-label="Supplier">${supplierOptions(companyId)}</select><input class="invoice-search" type="search" placeholder="Search fragrance…" aria-label="Search fragrance"><select name="productId" required aria-label="Fragrance"><option value="">Select fragrance…</option>${productOptions(companyId, productId)}</select><input name="qty" type="number" min="1" value="1" aria-label="Quantity"><input name="price" type="number" step="0.01" placeholder="Price" aria-label="Price"></div>`; }
+  function invoiceForm(customerId = '', orderId = '') { const order = orderId ? state.orders.find(o => o.id === orderId) : null, selectedCustomer = order?.customerId || customerId, options = state.customers.map(c => `<option value="${c.id}" ${c.id === selectedCustomer ? 'selected' : ''}>${esc(c.key)} · ${esc(c.name)}</option>`).join(''), lines = order ? order.items.map(i => invoiceLineHtml(product(i.productId)?.companyId || 'arabian', i.productId)).join('') : invoiceLineHtml(); openModal(`<span class="eyebrow">MIXED-COMPANY ORDER</span><h2>${order ? 'Edit invoice' : 'Create invoice'}</h2><form id="invoice-form" class="form"><input type="hidden" name="orderId" value="${esc(orderId)}"><label>Customer<select name="customerId" required><option value="">Select customer…</option>${options}</select></label><p class="invoice-help">Choose the supplier first, then select its fragrance. The same fragrance can be added from another supplier.</p><div id="invoice-lines">${lines}</div><button class="button ghost" type="button" data-action="add-line">＋ Add another item</button><label>Payment received<input name="paid" type="number" min="0" step="0.01" value="${order?.paid || 0}"></label><label>Notes<textarea name="notes">${esc(order?.notes || '')}</textarea></label><button class="button primary" type="submit">${order ? 'Save invoice changes' : 'Save invoice & print'}</button></form>`); }
+  function lineHtml() { return invoiceLineHtml(); }
+  function exportRows(rows, filename) { const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'application/vnd.ms-excel' })); a.download = `${filename}.xls`; a.click(); URL.revokeObjectURL(a.href); }
+  function exportCatalog(cid) { const ps = state.products.filter(p => p.companyId === cid); exportRows([['Serial', 'Supplier', 'Name', 'Code', 'Price/kg', 'Price/gram', 'Price/25g', 'Price/100g', 'Size/weight', 'Stock', 'Notes'], ...ps.map(p => [p.serial, company(p.companyId).name, p.name, p.code, p.priceKg, p.perGram, p.price25g, p.price100g, p.size, p.stock, p.notes])], `${company(cid).name}-catalog`); }
+  function exportCustomer(id) { const c = customer(id), os = state.orders.filter(o => o.customerId === id); exportRows([['Customer key', c.key], ['Name', c.name], ['Phone', c.phone], ['Account', c.account], ['Address', c.address], [], ['Invoice', 'Date', 'Items', 'Total', 'Paid', 'Remaining'], ...os.map(o => [o.number, o.date, o.items.length, o.total, o.paid, o.total - o.paid])], `${c.key}-record`); }
+  function invoicePrint(id) { const o = state.orders.find(x => x.id === id), c = customer(o.customerId); const html = `<div class="print-invoice"><header><div class="print-brand">${state.settings.logo ? `<img src="${state.settings.logo}" alt="">` : '<span class="print-mark">AMF</span>'}<div><strong>${esc(state.settings.brand)}</strong><small>${esc(state.settings.name)}</small></div></div><div class="print-meta"><b>INVOICE</b><span>${esc(o.number)}</span><span>${new Date(o.date).toLocaleDateString()}</span></div></header><section class="print-customer"><span>PREPARED FOR</span><strong>${esc(c.name)} · ${esc(c.key)}</strong><p>${esc(c.phone || '')}${c.phone && c.address ? ' · ' : ''}${esc(c.address || '')}<br>Account: ${esc(c.account || '—')}</p></section><table><thead><tr><th>Product</th><th>Supplier</th><th>Serial</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${o.items.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.company)}</td><td>${esc(i.serial)}</td><td>${i.qty}</td><td>${money(i.price)}</td><td>${money(i.total)}</td></tr>`).join('')}</tbody></table><div class="print-summary"><div><span>Notes</span><p>${esc(o.notes || 'Thank you for choosing us.')}</p></div><p><span>Subtotal</span><b>${money(o.total)}</b><span>Paid</span><b>${money(o.paid)}</b><span class="due-label">Balance due</span><b class="due-value">${money(o.total - o.paid)}</b></p></div><footer>${esc(state.settings.address)}${state.settings.address && state.settings.phone ? ' · ' : ''}${esc(state.settings.phone)}<br>Thank you for choosing ${esc(state.settings.name)}.</footer></div>`; const w = window.open('', '_blank'); w.document.write(`<title>${esc(o.number)} · ${esc(state.settings.brand)}</title><style>@page{size:auto;margin:14mm}*{box-sizing:border-box}body{background:#fff;color:#243238;padding:0;margin:0;font:13px Arial,sans-serif}.print-invoice{max-width:850px;margin:auto}.print-invoice header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #d5bd85;padding-bottom:22px}.print-brand{display:flex;align-items:center;gap:13px;font-size:21px;color:#1f3036}.print-brand img,.print-mark{width:52px;height:52px;object-fit:contain}.print-mark{display:grid;place-items:center;background:#1f3036;color:#e5c986;border-radius:14px;font-weight:bold;letter-spacing:1px}.print-brand strong,.print-brand small,.print-meta span,.print-customer span,.print-summary span{display:block}.print-brand small{color:#8a7650;font-size:10px;letter-spacing:1.5px;margin-top:4px}.print-meta{text-align:right;display:grid;gap:5px;color:#68757a}.print-meta b{color:#a17835;letter-spacing:2px;font-size:12px}.print-meta span:first-of-type{color:#243238;font-weight:bold}.print-customer{margin:28px 0}.print-customer span,.print-summary span{color:#a17835;letter-spacing:1.5px;font-size:9px;font-weight:bold}.print-customer strong{display:block;font-size:16px;margin:7px 0}.print-customer p{color:#68757a;line-height:1.6;margin:0}.print-invoice table{width:100%;border-collapse:collapse;margin:28px 0}.print-invoice th{background:#f4f0e7;color:#756447;font-size:10px;letter-spacing:.5px;text-transform:uppercase}.print-invoice th,.print-invoice td{padding:12px 10px;border-bottom:1px solid #e6e1d7;text-align:left}.print-invoice td:nth-last-child(-n+2),.print-invoice th:nth-last-child(-n+2){text-align:right}.print-summary{display:flex;justify-content:space-between;gap:30px;border-top:1px solid #d5bd85;padding-top:18px}.print-summary>div{max-width:55%}.print-summary p{margin:0;color:#68757a;line-height:1.7}.print-summary>p{display:grid;grid-template-columns:auto auto;gap:5px 25px;text-align:right}.print-summary>p b{color:#243238}.print-summary .due-label,.print-summary .due-value{color:#a17835}.print-invoice footer{text-align:center;color:#8a9698;border-top:1px solid #e6e1d7;margin-top:35px;padding-top:16px;line-height:1.6}@media print{body{padding:0}.print-invoice{max-width:none}}</style>${html}`); w.document.close(); w.focus(); w.print(); }
+
+  document.addEventListener('click', e => { const a = e.target.closest('[data-action]'); if (!a) return; const action = a.dataset.action;
+    if (action === 'quick-order') invoiceForm(a.dataset.customer || ''); if (action === 'toggle-theme') { state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = state.settings.theme; save(); render(); } if (action === 'edit-invoice') invoiceForm('', a.dataset.id); if (action === 'delete-invoice') { const order = state.orders.find(o => o.id === a.dataset.id); if (order && order.paid >= order.total && confirm('Delete this paid invoice permanently?')) { state.orders = state.orders.filter(o => o.id !== order.id); save(); render(); toast('Invoice deleted'); } } if (action === 'add-customer') customerForm(); if (action === 'product-detail') productModal(a.dataset.id); if (action === 'add-product') productForm(a.dataset.company); if (action === 'edit-product') { document.querySelector('.modal-backdrop')?.remove(); const p = product(a.dataset.id); productForm(p.companyId, p.id); } if (action === 'delete-product' && confirm('Remove this fragrance from the catalog?')) { state.products = state.products.filter(p => p.id !== a.dataset.id); save(); document.querySelector('.modal-backdrop')?.remove(); render(); toast('Fragrance removed'); } if (action === 'close') document.querySelector('.modal-backdrop')?.remove(); if (action === 'add-line') document.querySelector('#invoice-lines').insertAdjacentHTML('beforeend', lineHtml()); if (action === 'export-catalog') exportCatalog(a.dataset.company); if (action === 'export-customer') exportCustomer(a.dataset.id); if (action === 'invoice') invoicePrint(a.dataset.id); if (action === 'export-backup') { const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })); link.download = 'amf-backup.json'; link.click(); } });
+  document.addEventListener('submit', e => { e.preventDefault(); const f = e.target, data = Object.fromEntries(new FormData(f));
+    if (f.id === 'product-form') { const item = { ...data, priceKg: +data.priceKg || 0, perGram: +data.perGram || 0, price25g: +data.price25g || 0, price100g: +data.price100g || 0, stock: +data.stock || 0 }; if (data.id) state.products = state.products.map(p => p.id === data.id ? { ...p, ...item } : p); else state.products.push({ ...item, id: `${data.companyId}-${Date.now()}` }); save(); f.closest('.modal-backdrop').remove(); render(); toast('Catalog saved'); }
+    if (f.id === 'customer-form') { if (state.customers.some(c => c.key.toLowerCase() === data.key.toLowerCase())) return toast('That customer key already exists'); state.customers.push({ ...data, id: `customer-${Date.now()}` }); save(); f.closest('.modal-backdrop').remove(); render(); toast('Customer saved'); }
+    if (f.id === 'invoice-form') { const selects = [...f.querySelectorAll('select[name="productId"]')], items = selects.map((s, i) => { const p = product(s.value), qty = +f.querySelectorAll('input[name="qty"]')[i].value || 1, price = +f.querySelectorAll('input[name="price"]')[i].value || p.price25g; return { productId: p.id, name: p.name, company: company(p.companyId).name, serial: p.serial, qty, price, total: qty * price }; }), total = items.reduce((s, i) => s + i.total, 0), c = customer(data.customerId), existing = data.orderId ? state.orders.find(o => o.id === data.orderId) : null; if (existing) { Object.assign(existing, { customerId: c.id, customerName: c.name, items, total, paid: +data.paid || 0, notes: data.notes }); } else { const o = { id: `order-${Date.now()}`, number: `AMF-${new Date().getFullYear()}-${String(state.orders.length + 1).padStart(4, '0')}`, date: new Date().toISOString(), customerId: c.id, customerName: c.name, items, total, paid: +data.paid || 0, notes: data.notes }; state.orders.push(o); } save(); f.closest('.modal-backdrop').remove(); render(); if (!existing) invoicePrint(state.orders[state.orders.length - 1].id); else toast('Invoice updated'); }
+    if (f.id === 'settings-form') { state.settings = { ...state.settings, name: data.name, brand: data.brand, phone: data.phone, address: data.address }; const file = f.logo.files[0]; if (file) { const reader = new FileReader(); reader.onload = () => { state.settings.logo = reader.result; save(); render(); }; reader.readAsDataURL(file); } else { save(); render(); } toast('Settings saved'); }
+    if (f.id === 'companies-form') { companies.forEach(c => state.companyMeta[c.id] = { ...state.companyMeta[c.id], name: data[c.id] }); save(); render(); toast('Suppliers updated'); }
   });
-  document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", closeModals));
-  [$("#detailModal"), $("#addModal")].forEach((modal) => modal.addEventListener("click", (event) => { if (event.target === modal) closeModals(); }));
-  $("#openAdd").addEventListener("click", () => { $("#addForm").reset(); $("#addModal").hidden = false; });
-  $("#addForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const item = {
-      id: `custom-${Date.now()}`, no: `C${catalog.filter((entry) => String(entry.no).startsWith("C")).length + 1}`,
-      name: form.get("name"), code: form.get("code"), priceKg: Number(form.get("priceKg")),
-      perGram: Number(form.get("perGram")), price25g: Number(form.get("price25g")), price100g: Number(form.get("price100g"))
-    };
-    catalog.push(item); persist(); closeModals(); render();
-  });
-  $("#detailModal").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-delete]");
-    if (!button || !selected || !window.confirm(`Remove ${selected.name} from your collection?`)) return;
-    catalog = catalog.filter((item) => item.id !== button.dataset.delete);
-    persist(); closeModals(); render();
-  });
-  $("#resetCatalog").addEventListener("click", () => {
-    if (!window.confirm("Restore the official catalog and remove custom changes?")) return;
-    catalog = [...window.INITIAL_CATALOG]; persist(); render();
-  });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeModals(); });
-  render();
+  document.addEventListener('input', e => { if (e.target.id === 'product-search') { const q = e.target.value.toLowerCase(); document.querySelectorAll('.product-card').forEach(x => x.hidden = !x.dataset.search.includes(q)); } if (e.target.id === 'customer-search') { const q = e.target.value.toLowerCase(); document.querySelectorAll('.customer-card').forEach(x => x.hidden = !x.dataset.search.includes(q)); } });
+  document.addEventListener('input', e => { if (e.target.matches('#invoice-lines .invoice-search')) { const row = e.target.closest('.invoice-line'), supplier = row.querySelector('select[name="companyId"]').value, productSelect = row.querySelector('select[name="productId"]'); productSelect.innerHTML = `<option value="">Select fragrance…</option>${productOptions(supplier, '', e.target.value)}`; } });
+  document.addEventListener('change', e => { if (e.target.matches('#invoice-lines select[name="companyId"]')) { const row = e.target.closest('.invoice-line'), productSelect = row.querySelector('select[name="productId"]'); row.querySelector('.invoice-search').value = ''; productSelect.innerHTML = `<option value="">Select fragrance…</option>${productOptions(e.target.value)}`; } });
+  document.addEventListener('click', e => { if (e.target.matches('[data-close]') || e.target.classList.contains('modal-backdrop')) e.target.closest('.modal-backdrop')?.remove(); });
+  window.addEventListener('hashchange', render); render();
 })();
