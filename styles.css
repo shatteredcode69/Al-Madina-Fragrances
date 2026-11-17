@@ -1826,3 +1826,16 @@ body {
         animation:none;
     }
 }
+
+.invoice-new-customer {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--sage) 28%, transparent)
+}
+
+.invoice-new-customer[hidden] {
+    display: none
+}
