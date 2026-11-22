@@ -1,0 +1,14 @@
+{
+  "name": "amf-fragrances",
+  "version": "1.0.0",
+  "description": "Local-first catalog, customer and invoice desk for Al Madina Fragrances (no build step, runs from static files).",
+  "private": true,
+  "scripts": {
+    "start": "npx --yes http-server . -p 8080 -c-1",
+    "test": "node tests/app.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  },
+  "engines": { "node": ">=18" }
+}
