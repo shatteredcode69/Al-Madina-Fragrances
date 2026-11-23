@@ -244,6 +244,195 @@ test('Changes saved in another tab are picked up; Escape closes dialogs', async 
   d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); assert.equal(d.querySelector('.modal-backdrop'), null);
 });
 
+
+// ───────────────────────────── Price auto-fill ─────────────────────────────
+const typeInto = async (w, form, name, value) => { const input = form.elements[name]; input.value = value; input.dispatchEvent(new w.Event('input', { bubbles: true })); await tick(5); };
+
+test('Typing the price per kg fills per gram, per 25g and per 100g (1 kg = 100,000 -> 100 / 2,500 / 10,000)', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); await open(w, '[data-action="add-product"]');
+  const f = d.querySelector('#product-form');
+  await typeInto(w, f, 'priceKg', '100000');
+  assert.deepEqual(['perGram', 'price25g', 'price100g'].map(n => f.elements[n].value), ['100', '2500', '10000']);
+  await typeInto(w, f, 'priceKg', '36363');
+  assert.deepEqual(['perGram', 'price25g', 'price100g'].map(n => f.elements[n].value), ['36.363', '909.08', '3636.3']);
+  f.elements.name.value = 'Auto filled'; f.requestSubmit(); await tick();
+  const saved = stored(w).products.at(-1);
+  assert.deepEqual([saved.priceKg, saved.perGram, saved.price25g, saved.price100g], [36363, 36.363, 909.08, 3636.3]);
+});
+
+test('Auto-filled prices can still be adjusted by hand, and clearing the kg price leaves them alone', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); await open(w, '[data-action="add-product"]');
+  const f = d.querySelector('#product-form');
+  await typeInto(w, f, 'priceKg', '50000'); f.elements.price25g.value = '1300';
+  await typeInto(w, f, 'priceKg', ''); assert.equal(f.elements.price25g.value, '1300');
+  f.elements.name.value = 'Adjusted'; f.requestSubmit(); await tick();
+  assert.equal(stored(w).products.at(-1).price25g, 1300);
+});
+
+test('The price fields accept fractional prices (step is not 0.01)', async () => {
+  const w = boot(); await go(w, '#/catalog/arabian'); await open(w, '[data-action="add-product"]');
+  for (const n of ['priceKg', 'perGram', 'price25g', 'price100g']) assert.equal(w.document.querySelector(`#product-form [name=${n}]`).step, 'any');
+});
+
+// ───────────────────────────── Share a customised list ─────────────────────────────
+const JANAN = 'Janan sports جانان اسپورٹس';
+const shareOpen = async (w, selector = '[data-action="share-list"]') => { await open(w, selector); return w.document.querySelector('#share-form'); };
+const pick = async (w, form, id, on = true) => { const box = form.querySelector(`input[name=pick][value="${id}"]`); box.checked = on; box.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(5); };
+const withCustomer = (phone, extra = {}) => ({ customers: [{ id: 'c1', key: '001-abbas', name: 'Abbas', phone, account: '', address: '' }], orders: [], ...extra });
+
+test('Share list: searching "janan" and ticking one fragrance writes it exactly as in the catalog', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w);
+  const search = f.querySelector('#share-search'); search.value = 'janan'; search.dispatchEvent(new w.Event('input', { bubbles: true }));
+  const visible = [...f.querySelectorAll('.share-item')].filter(r => !r.hidden); assert.equal(visible.length, 3);
+  await pick(w, f, 'arabian-29');
+  const text = f.querySelector('#share-text').value;
+  assert.match(text, /^\*Al Madina Fragrances\*\nFragrance price list\n\n\*Janan sports جانان اسپورٹس\*\nCode: 271062\nPrice \/ kg: 60,000 PKR\nPrice \/ gram: 60 PKR\nPrice \/ 25g: 1,500 PKR\nPrice \/ 100g: 6,000 PKR$/);
+  assert.equal(f.querySelector('#share-count').textContent, '1 selected');
+});
+
+test('Share list: several fragrances are numbered; unticking a detail removes it; the heading is editable', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w);
+  await pick(w, f, 'arabian-29'); await pick(w, f, 'arabian-177');
+  let text = f.querySelector('#share-text').value; assert.match(text, /1\. \*Janan sports[^\n]*\*\n {3}Code: 271062/); assert.match(text, /2\. \*janan gold جانان\*/);
+  const box = f.querySelector('input[name=field][value=perGram]'); box.checked = false; box.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.doesNotMatch(f.querySelector('#share-text').value, /Price \/ gram/);
+  f.elements.title.value = 'November offers'; f.elements.title.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.match(f.querySelector('#share-text').value, /\nNovember offers\n/);
+  f.querySelector('input[name=field][value=serial]').checked = true; f.querySelector('input[name=field][value=serial]').dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.match(f.querySelector('#share-text').value, /Serial number: AR-029/);
+});
+
+test('Share list: a hand-edited message is kept until "Reset text"', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w);
+  await pick(w, f, 'arabian-29');
+  const area = f.querySelector('#share-text'); area.value = 'My own words'; area.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await pick(w, f, 'arabian-177'); assert.equal(area.value, 'My own words'); assert.equal(f.querySelector('#share-count').textContent, '2 selected');
+  await open(w, '[data-action="share-reset"]'); assert.match(area.value, /2\. \*janan gold/);
+});
+
+test('Share list: sends to the chosen customer\'s WhatsApp with a greeting, or opens the chooser without one', async () => {
+  const w = boot(withCustomer('0300-1234567')), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w);
+  await pick(w, f, 'arabian-29'); f.elements.customerId.value = 'c1'; f.elements.customerId.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.match(f.querySelector('#share-text').value, /^Assalam o Alaikum Abbas,\n\n\*Al Madina Fragrances\*/);
+  await open(w, '[data-action="share-whatsapp"]');
+  assert.ok(w.__lastLink.startsWith('https://wa.me/923001234567?text='), w.__lastLink);
+  assert.match(decodeURIComponent(w.__lastLink), /\*Janan sports جانان اسپورٹس\*/);
+  f.elements.customerId.value = ''; w.__lastLink = ''; await open(w, '[data-action="share-whatsapp"]');
+  assert.ok(w.__lastLink.startsWith('https://wa.me/?text='), w.__lastLink);
+  assert.deepEqual(stored(w).settings.shareFields, ['code', 'priceKg', 'perGram', 'price25g', 'price100g'], 'the chosen details are remembered');
+});
+
+test('Share list: nothing selected, a customer without a number, and a list that is too long are all refused', async () => {
+  const w = boot(withCustomer('')), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w);
+  await open(w, '[data-action="share-whatsapp"]'); assert.match(d.querySelector('#toast').textContent, /Choose at least one/);
+  await pick(w, f, 'arabian-29'); f.elements.customerId.value = 'c1';
+  await open(w, '[data-action="share-whatsapp"]'); assert.match(d.querySelector('#toast').textContent, /valid WhatsApp number for Abbas/); assert.equal(w.__lastLink, undefined);
+  f.elements.customerId.value = ''; await open(w, '[data-action="share-select-shown"]'); assert.equal(f.querySelector('#share-count').textContent, '206 selected');
+  await open(w, '[data-action="share-whatsapp"]'); assert.match(d.querySelector('#toast').textContent, /too long/); assert.equal(w.__lastLink, undefined);
+  await open(w, '[data-action="share-clear"]'); assert.equal(f.querySelector('#share-count').textContent, '0 selected'); assert.equal(f.querySelector('#share-text').value, '');
+});
+
+test('Share list: copy text and print / save as PDF', async () => {
+  const w = boot(), d = w.document; await go(w, '#/catalog/arabian'); const f = await shareOpen(w); await pick(w, f, 'arabian-29');
+  let copied = ''; Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async t => { copied = t; } }, configurable: true });
+  await open(w, '[data-action="share-copy"]'); await tick(20); assert.match(copied, /Janan sports/); assert.match(d.querySelector('#toast').textContent, /copied/);
+  await open(w, '[data-action="share-print"]'); const doc = w.__opened.at(-1).document.body.innerHTML;
+  assert.match(doc, /Janan sports جانان اسپورٹس/); assert.match(doc, /271062/); assert.match(doc, /60,000 PKR/);
+});
+
+test('Share list: can be started from a fragrance and from a customer page', async () => {
+  const w = boot(withCustomer('0300-1234567')), d = w.document; await go(w, '#/catalog/arabian');
+  await open(w, '.card-open'); await open(w, '[data-action="share-product"]');
+  assert.equal(d.querySelectorAll('.modal-backdrop').length, 1); assert.equal(d.querySelector('#share-count').textContent, '1 selected');
+  assert.match(d.querySelector('#share-text').value, /\*Gucci flora/);
+  await go(w, '#/customers/c1'); const f = await shareOpen(w, '[data-action="share-customer"]'); assert.equal(f.elements.customerId.value, 'c1');
+});
+
+// ───────────────────────────── WhatsApp payment reminders ─────────────────────────────
+const daysAgo = n => new Date(Date.now() - n * 86400000).toISOString();
+const order = (id, ageDays, extra = {}) => ({ id, number: `AMF-2026-${id}`, date: daysAgo(ageDays), customerId: 'c1', customerName: 'Abbas', items: [], total: 5000, paid: 1000, notes: '', ...extra });
+const withOrders = (orders, phone = '0300-1234567') => ({ customers: [{ id: 'c1', key: '001-abbas', name: 'Abbas', phone, account: '', address: '' }], orders });
+const rowFor = (d, number) => [...d.querySelectorAll('.reminder-row')].find(r => r.textContent.includes(number));
+
+test('Reminders follow the schedule: due on day 1, 2 and 7; paid and stopped invoices are left out', async () => {
+  const w = boot(withOrders([order('0', 0), order('1', 1), order('2', 10), order('3', 3, { paid: 5000 }), order('4', 10, { noReminders: true })])), d = w.document;
+  await go(w, '#/reminders');
+  const due = [...d.querySelectorAll('.panel')][0].textContent;
+  assert.match(due, /AMF-2026-1/); assert.match(due, /AMF-2026-2/); assert.doesNotMatch(due, /AMF-2026-0/); assert.doesNotMatch(due, /AMF-2026-4/);
+  assert.match(rowFor(d, 'AMF-2026-1').textContent, /Due today/); assert.match(rowFor(d, 'AMF-2026-2').textContent, /Overdue by 9 days/);
+  assert.match(rowFor(d, 'AMF-2026-0').textContent, /Next:/); assert.match(rowFor(d, 'AMF-2026-4').textContent, /Reminders stopped/);
+  assert.equal(rowFor(d, 'AMF-2026-3'), undefined, 'paid invoices never appear');
+  assert.equal(d.querySelector('.nav-badge').textContent, '2');
+  await go(w, '#/dashboard'); assert.match(d.querySelector('.reminder-banner').textContent, /2 payment reminders are due/);
+});
+
+test('Sending a reminder opens WhatsApp with the message, logs it, and schedules the next one', async () => {
+  const w = boot(withOrders([order('1', 1)])), d = w.document; await go(w, '#/reminders');
+  d.querySelector('[data-action="send-reminder"]').click(); await tick();
+  assert.ok(w.__lastLink.startsWith('https://wa.me/923001234567?text='), w.__lastLink);
+  const text = decodeURIComponent(w.__lastLink.split('?text=')[1]);
+  assert.match(text, /Assalam o Alaikum Abbas/); assert.match(text, /AMF-2026-1/); assert.match(text, /4,000 PKR is still pending \(total 5,000 PKR, received 1,000 PKR\)/);
+  assert.equal(stored(w).orders[0].reminders.length, 1);
+  assert.match(rowFor(d, 'AMF-2026-1').textContent, /1 reminder sent/); assert.match(rowFor(d, 'AMF-2026-1').textContent, /Next:/, 'day 2 comes tomorrow, not today');
+  assert.equal(d.querySelector('.nav-badge'), null);
+});
+
+test('Reminder schedule continues: the repeat interval applies after the last scheduled reminder', async () => {
+  const sent = n => Array.from({ length: n }, (_, i) => ({ at: daysAgo(i === n - 1 ? 8 : 20) }));   // last one went out 8 days ago
+  const w = boot(withOrders([order('1', 30, { reminders: sent(3) })])), d = w.document; await go(w, '#/reminders');
+  assert.match(rowFor(d, 'AMF-2026-1').textContent, /Overdue by 1 day/);
+  const w2 = boot(withOrders([order('1', 30, { reminders: [{ at: daysAgo(1) }, { at: daysAgo(1) }, { at: daysAgo(1) }] })])); await go(w2, '#/reminders');
+  assert.match(rowFor(w2.document, 'AMF-2026-1').textContent, /Next:/);
+});
+
+test('Phone numbers are normalised for WhatsApp (0300…, +92…, 0092…, no leading zero, first of several)', async () => {
+  const cases = { '0300-1234567': '923001234567', '+92 300 1234567': '923001234567', '0092 300 1234567': '923001234567', '3001234567': '923001234567', '923001234567': '923001234567', '03001234567 / 0321 7654321': '923001234567', '+44 7700 900123': '447700900123' };
+  for (const [raw, expected] of Object.entries(cases)) {
+    const w = boot(withOrders([order('1', 5)], raw)); await go(w, '#/reminders'); w.document.querySelector('[data-action="send-reminder"]').click(); await tick();
+    assert.ok(w.__lastLink?.startsWith(`https://wa.me/${expected}?text=`), `${raw} -> ${w.__lastLink}`);
+  }
+});
+
+test('A customer without a usable number gets a prompt to add one, and nothing is logged', async () => {
+  for (const phone of ['', 'call me', '12']) {
+    const w = boot(withOrders([order('1', 5)], phone)), d = w.document; await go(w, '#/reminders'); d.querySelector('[data-action="send-reminder"]').click(); await tick();
+    assert.match(d.querySelector('#toast').textContent, /valid WhatsApp number for Abbas/); assert.ok(d.querySelector('#customer-form'), 'customer form opens'); assert.equal(w.__lastLink, undefined);
+    assert.equal(stored(w).orders?.[0]?.reminders, undefined);
+  }
+});
+
+test('Reminders can be snoozed until tomorrow, stopped and resumed', async () => {
+  const w = boot(withOrders([order('1', 5)])), d = w.document; await go(w, '#/reminders');
+  d.querySelector('[data-action="snooze-reminder"]').click(); await tick(); assert.match(rowFor(d, 'AMF-2026-1').textContent, /Next:/); assert.equal(d.querySelector('.nav-badge'), null);
+  d.querySelector('[data-action="toggle-reminders"]').click(); await tick(); assert.match(rowFor(d, 'AMF-2026-1').textContent, /Reminders stopped/); assert.match(rowFor(d, 'AMF-2026-1').textContent, /Resume/);
+  d.querySelector('[data-action="toggle-reminders"]').click(); await tick(); assert.doesNotMatch(rowFor(d, 'AMF-2026-1').textContent, /Reminders stopped/);
+});
+
+test('The Remind button on invoices sends right away (even before the schedule says so) and is absent on paid invoices', async () => {
+  const w = boot(withOrders([order('1', 0), order('2', 0, { paid: 5000 })])), d = w.document; await go(w, '#/billing');
+  assert.equal(d.querySelectorAll('[data-action="send-reminder"]').length, 1);
+  d.querySelector('[data-action="send-reminder"]').click(); await tick(); assert.ok(w.__lastLink.startsWith('https://wa.me/923001234567'));
+});
+
+test('Reminder settings: schedule, repeat, country code and message are validated and used', async () => {
+  const w = boot(withOrders([order('1', 5)], '0300-1234567')), d = w.document; await go(w, '#/settings');
+  await submit(w, '#reminder-form', { schedule: 'soon' }); assert.match(d.querySelector('#toast').textContent, /at least one day/);
+  await submit(w, '#reminder-form', { schedule: '2, 5, 5, 14', countryCode: '', repeatEvery: '3' }); assert.match(d.querySelector('#toast').textContent, /country code/);
+  await submit(w, '#reminder-form', { schedule: '2, 5, 5, 14', countryCode: '1', repeatEvery: '3', template: 'Hi {name}: {amount} left on {invoice} after {days} days. {unknown}' });
+  assert.deepEqual([stored(w).settings.reminders.schedule, stored(w).settings.reminders.repeatEvery, stored(w).settings.countryCode], ['2, 5, 14', 3, '1']);
+  await go(w, '#/reminders'); d.querySelector('[data-action="send-reminder"]').click(); await tick();
+  assert.ok(w.__lastLink.startsWith('https://wa.me/13001234567?text='), w.__lastLink);
+  assert.equal(decodeURIComponent(w.__lastLink.split('?text=')[1]), 'Hi Abbas: 4,000 PKR left on AMF-2026-1 after 5 days. {unknown}');
+  await go(w, '#/settings'); d.querySelector('[data-action="reset-reminder-text"]').click();
+  assert.match(d.querySelector('#reminder-form [name=template]').value, /friendly reminder from \{shop\}/);
+});
+
+test('Older saved data without reminder settings still works', async () => {
+  const w = boot({ settings: { theme: 'light', name: 'Old shop' }, customers: [{ id: 'c1', key: 'k', name: 'Abbas', phone: '03001234567' }], orders: [order('1', 5)], products: [] });
+  await go(w, '#/reminders'); assert.match(w.document.querySelector('.reminder-row').textContent, /Due today|Overdue/);
+  w.document.querySelector('[data-action="send-reminder"]').click(); await tick(); assert.match(decodeURIComponent(w.__lastLink), /from Old shop/);
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {

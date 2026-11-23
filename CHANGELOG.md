@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+- **Price auto-fill:** typing the price per kg fills price per gram, per 25 g and per 100 g (kg / 1000, kg / 40,
+  kg / 10). Fractional prices are accepted by the browser.
+- **Share a customised list:** choose fragrances (search, filter by supplier, select all shown), choose which
+  details to include, pick a customer, edit the message, then send on WhatsApp, copy, or print / save as PDF.
+  Fragrance names are used exactly as stored. Your chosen details are remembered.
+- **WhatsApp payment reminders:** schedule (default day 1, 2, 7, then every 7 days), Reminders page, sidebar badge,
+  dashboard banner, snooze until tomorrow, stop / resume per invoice, per-invoice **Remind** button, editable
+  message, phone-number normalisation with a configurable country code. Every opened reminder is logged.
+
 ## 1.0.0
 
 ### Fixed

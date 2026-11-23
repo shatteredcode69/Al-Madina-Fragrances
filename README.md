@@ -21,10 +21,28 @@ server is recommended.)
 | **Customers** | Searchable customer keys such as `001-abbas`, a dedicated account page, edit, and delete (only when the customer has no invoices). |
 | **Billing** | One invoice can mix products from all suppliers. Lines keep a snapshot of the name, supplier, serial and price, so old invoices never change. Add or remove lines, record payments, edit invoices later. |
 | **Invoices** | **Invoice** opens a branded print view; choose "Save as PDF" in the print dialog. Invoice numbers are unique and never reused. |
+| **Price auto-fill** | In the fragrance form, type the price per kg and the other prices fill in by themselves: ÷ 1000 per gram, ÷ 40 per 25 g, ÷ 10 per 100 g (1 kg = 100,000 PKR gives 100 / 2,500 / 10,000). You can still adjust any of them. |
+| **Share a list** | **Share list** (catalog), **Share** (on a fragrance) or **Send price list** (customer page) builds a message with the fragrances you tick, written exactly as they appear in your catalog, plus the details you choose (code, price/kg, /gram, /25g, /100g, serial, size, stock, notes). Send it on WhatsApp, copy it, or print / save it as a branded PDF. |
+| **Payment reminders** | Unpaid invoices get WhatsApp reminders on a schedule you set (default: day 1, 2 and 7 after the invoice, then every 7 days). The **Reminders** page, a sidebar badge and a dashboard banner show what is due; one tap opens WhatsApp with the message ready. See below. |
 | **Backups** | **Export backup** downloads a JSON file; **Import backup** restores it (it replaces the current data after a confirmation). |
 | **Settings** | Shop details, logo (large images are shrunk automatically), supplier names, light/dark theme. |
 
 Keyboard: `Esc` closes any dialog.
+
+## WhatsApp: how it works (and what it cannot do)
+
+The app opens WhatsApp (app or web) with the number and the message already filled in; **you press Send**.
+It cannot send messages by itself: a page that is closed cannot run, and fully automatic WhatsApp messages
+need the paid WhatsApp Business API plus a small server, which would also move your customers' data off
+this device. So "automatic" here means *the app tells you who to remind and when*.
+
+- Numbers are cleaned up for you: `0300-1234567`, `+92 300 1234567` and `3001234567` all become `+92 300 1234567`.
+  Change the default country code in **Settings -> Payment reminders**.
+- Each reminder you open is logged on the invoice (shown as "N reminders sent, last ..."). Use **Tomorrow** to
+  postpone, or **Stop** for a customer who promised a date.
+- The schedule, repeat interval and message text (with `{name}`, `{invoice}`, `{amount}`, `{total}`, `{paid}`,
+  `{date}`, `{days}`, `{shop}`) are editable in Settings.
+- Very long lists do not fit in one WhatsApp link; the app tells you, and you can use **Copy text** or the PDF.
 
 ## Your data
 

@@ -15,7 +15,7 @@ function boot(preState) {
   w.confirm = () => true;
   w.URL.createObjectURL = () => 'blob:test';
   w.URL.revokeObjectURL = () => {};
-  w.HTMLAnchorElement.prototype.click = function () { w.__lastDownload = this.download; };
+  w.HTMLAnchorElement.prototype.click = function () { w.__lastDownload = this.download; w.__lastLink = this.href; };
   w.__opened = [];
   w.open = () => { const win = new JSDOM('<html><body></body></html>').window; win.print = () => {}; win.focus = () => {}; w.__opened.push(win); return win; };
   w.__errors = [];
