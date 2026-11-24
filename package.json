@@ -1,6 +1,6 @@
 {
   "name": "amf-fragrances",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local-first catalog, customer and invoice desk for Al Madina Fragrances (no build step, runs from static files).",
   "private": true,
   "scripts": {

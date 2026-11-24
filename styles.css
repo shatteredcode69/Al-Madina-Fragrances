@@ -2083,11 +2083,60 @@ body {
 }
 
 .page-intro p a {
-    color: #bd9146;
+    color: color-mix(in srgb, #bd9146 65%, var(--ink));
     text-decoration: underline;
     text-underline-offset: 3px
 }
 
 .detail-panel+.detail-panel {
     margin-top: 18px
+}
+
+.modal-actions.left {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin-top: 12px
+}
+
+.supplier-extra {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 0;
+    border-top: 1px solid var(--line)
+}
+
+.supplier-extra small {
+    display: block;
+    color: var(--muted)
+}
+
+/* ── Readable text in both themes ──────────────────────────────────────────────────────────
+   The fragrance card is a <button>, and buttons default to black text, which was nearly
+   invisible (1.35:1) on the dark card. Colours are now set explicitly. */
+.card-open {
+    color: inherit
+}
+
+.product-card h3,
+.product-card strong {
+    color: var(--ink)
+}
+
+.company-avatar,
+.company-switcher span {
+    color: color-mix(in srgb, var(--accent) 58%, #000)
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark
+}
+
+:root[data-theme="dark"] .form label {
+    color: var(--muted)
+}
+
+.share-item small {
+    color: color-mix(in srgb, var(--muted) 78%, var(--ink))
 }

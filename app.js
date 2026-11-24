@@ -1,7 +1,7 @@
 /* global INITIAL_CATALOG */
 (() => {
   const KEY = 'amf-store-v1';
-  const companies = [
+  const BASE_COMPANIES = [
     { id: 'arabian', name: 'Arabian Perfumery', note: 'Made in Spain', color: '#cfad66' },
     { id: 'company-2', name: 'Company 2', note: 'Add supplier details', color: '#91b5aa' },
     { id: 'company-3', name: 'Company 3', note: 'Add supplier details', color: '#c98c83' },
@@ -25,7 +25,7 @@
       shareFields: ['code', 'priceKg', 'perGram', 'price25g', 'price100g'], shareTitle: 'Fragrance price list'
     },
     products: seedProducts, customers: [], orders: [],
-    companyMeta: Object.fromEntries(companies.map(c => [c.id, { name: c.name, note: c.note }]))
+    companyMeta: Object.fromEntries(BASE_COMPANIES.map(c => [c.id, { name: c.name, note: c.note }]))
   };
   let state = load();
   document.documentElement.dataset.theme = state.settings.theme || 'light';
@@ -60,8 +60,12 @@
   }
   let saveFailed = false;
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); saveFailed = false; return true; }
-    catch (err) { saveFailed = true; console.error('AMF: could not save to browser storage', err); return false; }
+    state.savedAt = new Date().toISOString();
+    let ok = true;
+    try { localStorage.setItem(KEY, JSON.stringify(state)); saveFailed = false; }
+    catch (err) { saveFailed = true; ok = false; console.error('AMF: could not save to browser storage', err); }
+    queueFileWrite();   // the linked data file (if any) is written even when browser storage is full
+    return ok;
   }
   function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function money(n) { return `${Number(n || 0).toLocaleString()} PKR`; }
@@ -213,7 +217,7 @@
     const customers = state.customers.map(c => `<option value="${esc(c.id)}"${c.id === customerId ? ' selected' : ''}>${esc(c.key)} · ${esc(c.name)}${waNumber(c.phone) ? '' : ' — no WhatsApp number'}</option>`).join('');
     openModal(`<span class="eyebrow">SEND TO A CUSTOMER</span><h2>Share fragrance list</h2><form id="share-form" class="form">
       <div class="form-cols"><label>Customer<select name="customerId"><option value="">Choose the contact in WhatsApp</option>${customers}</select></label><label>Heading<input name="title" value="${esc(state.settings.shareTitle ?? '')}" placeholder="Fragrance price list"></label></div>
-      <div class="share-pick"><div class="share-pick-head"><input id="share-search" type="search" placeholder="Search by name, code or serial…" autocomplete="off" aria-label="Search fragrances"><select id="share-supplier" aria-label="Supplier"><option value="">All suppliers</option>${companies.map(c => `<option value="${c.id}"${c.id === supplier ? ' selected' : ''}>${esc(supplierName(c.id))}</option>`).join('')}</select></div><div class="share-list" id="share-list">${rows}</div><div class="share-count"><span id="share-count">0 selected</span><span><button type="button" class="button small ghost" data-action="share-select-shown">Select shown</button> <button type="button" class="button small ghost" data-action="share-clear">Clear</button></span></div></div>
+      <div class="share-pick"><div class="share-pick-head"><input id="share-search" type="search" placeholder="Search by name, code or serial…" autocomplete="off" aria-label="Search fragrances"><select id="share-supplier" aria-label="Supplier"><option value="">All suppliers</option>${allCompanies().map(c => `<option value="${c.id}"${c.id === supplier ? ' selected' : ''}>${esc(supplierName(c.id))}</option>`).join('')}</select></div><div class="share-list" id="share-list">${rows}</div><div class="share-count"><span id="share-count">0 selected</span><span><button type="button" class="button small ghost" data-action="share-select-shown">Select shown</button> <button type="button" class="button small ghost" data-action="share-clear">Clear</button></span></div></div>
       <fieldset class="share-fields"><legend>Details to include</legend>${SHARE_FIELDS.map(f => `<label><input type="checkbox" name="field" value="${f[0]}"${keys.includes(f[0]) ? ' checked' : ''}>${f[1]}</label>`).join('')}</fieldset>
       <label>Message (you can edit it before sending)<textarea id="share-text" rows="9" placeholder="Tick the fragrances above and the message appears here."></textarea></label>
       <div class="modal-actions"><button type="button" class="button ghost" data-action="share-reset">Reset text</button><button type="button" class="button ghost" data-action="share-print">Print / Save PDF</button><button type="button" class="button ghost" data-action="share-copy">Copy text</button><button type="button" class="button primary" data-action="share-whatsapp">Send on WhatsApp</button></div></form>`, 'wide');
@@ -239,6 +243,199 @@
     const url = waLink(phone, text);
     if (url.length > 7000) return toast('This list is too long for one WhatsApp message. Choose fewer fragrances, or use Copy text or Print / Save PDF.');
     remember(); openExternal(url);
+  }
+
+  // ── One JSON data file: every supplier with its own list of fragrances ───────────────────────────
+  // A fragrance sold by two suppliers is listed under each of them, separately (own id, serial and prices).
+  const DATA_FORMAT = 'amf-data', DATA_FORMAT_VERSION = 3;
+  function dateStamp() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+  function toDataFile({ catalogOnly = false } = {}) {
+    const suppliers = allCompanies().map(c => ({ id: c.id, name: supplierName(c.id), note: state.companyMeta[c.id]?.note ?? c.note, fragrances: [] }));
+    state.products.forEach(p => {
+      let supplier = suppliers.find(x => x.id === p.companyId);
+      if (!supplier) { supplier = { id: p.companyId, name: p.companyId, note: '', fragrances: [] }; suppliers.push(supplier); }   // never lose a fragrance
+      const { companyId, ...fragrance } = p; supplier.fragrances.push(fragrance);
+    });
+    const file = { format: DATA_FORMAT, formatVersion: DATA_FORMAT_VERSION, kind: catalogOnly ? 'catalog' : 'full', savedAt: state.savedAt || new Date().toISOString(), suppliers };
+    return catalogOnly ? file : { ...file, settings: state.settings, customers: state.customers, orders: state.orders };
+  }
+  // Validates a data file (new supplier-grouped format or an older flat backup). Throws an Error with a readable message.
+  function parseDataFile(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('That file is not an AMF data file');
+    const checkPeople = o => {
+      if (o.customers !== undefined && !(Array.isArray(o.customers) && o.customers.every(c => c && typeof c.id === 'string' && typeof c.name === 'string'))) throw new Error('The customers in that file are malformed');
+      if (o.orders !== undefined && !(Array.isArray(o.orders) && o.orders.every(x => x && typeof x.id === 'string' && Array.isArray(x.items)))) throw new Error('The invoices in that file are malformed');
+    };
+    if (Array.isArray(obj.suppliers)) {
+      const products = [], companyMeta = {}, seen = new Set();
+      for (const supplier of obj.suppliers) {
+        if (!supplier || typeof supplier.id !== 'string' || !supplier.id || !Array.isArray(supplier.fragrances)) throw new Error('A supplier in that file is malformed');
+        if (companyMeta[supplier.id]) throw new Error(`The supplier "${supplier.id}" appears twice`);
+        companyMeta[supplier.id] = { name: String(supplier.name || supplier.id), note: String(supplier.note ?? '') };
+        for (const item of supplier.fragrances) {
+          if (!item || typeof item.id !== 'string' || !item.id) throw new Error(`A fragrance under "${supplier.name || supplier.id}" has no id`);
+          if (seen.has(item.id)) throw new Error(`The fragrance id "${item.id}" appears twice`);
+          seen.add(item.id); products.push({ ...item, companyId: supplier.id });
+        }
+      }
+      checkPeople(obj);
+      const full = obj.kind ? obj.kind === 'full' : Array.isArray(obj.customers) && Array.isArray(obj.orders);
+      if (full && !(Array.isArray(obj.customers) && Array.isArray(obj.orders))) throw new Error('A full data file needs both customers and orders');
+      return { kind: full ? 'full' : 'catalog', products, companyMeta, customers: obj.customers, orders: obj.orders, settings: obj.settings, savedAt: obj.savedAt, version: STATE_VERSION };
+    }
+    if (Array.isArray(obj.products) && Array.isArray(obj.customers) && Array.isArray(obj.orders) && obj.products.every(p => p && typeof p.id === 'string' && typeof p.companyId === 'string')) {
+      checkPeople(obj);   // older flat backup (Export backup before the supplier-grouped format)
+      return { kind: 'full', products: obj.products, companyMeta: obj.companyMeta, customers: obj.customers, orders: obj.orders, settings: obj.settings, savedAt: obj.savedAt, version: Number(obj.version) || 1 };
+    }
+    throw new Error('That file is not an AMF data file');
+  }
+  function stateFromDataFile(parsed) {
+    if (parsed.kind === 'catalog') return normalize({ ...state, products: parsed.products, companyMeta: { ...state.companyMeta, ...parsed.companyMeta }, version: STATE_VERSION });
+    return normalize({ settings: parsed.settings, products: parsed.products, companyMeta: parsed.companyMeta, customers: parsed.customers, orders: parsed.orders, savedAt: parsed.savedAt, version: parsed.version });
+  }
+  function dataSummary(parsed) {
+    const suppliers = new Set(parsed.products.map(p => p.companyId)).size;
+    return `${parsed.products.length} fragrances across ${suppliers} supplier${suppliers === 1 ? '' : 's'}` + (parsed.kind === 'full' ? ` · ${parsed.customers.length} customers · ${parsed.orders.length} invoices` : '');
+  }
+  function exportData(catalogOnly = false) { download(new Blob([JSON.stringify(toDataFile({ catalogOnly }), null, 2)], { type: 'application/json' }), `amf-${catalogOnly ? 'catalog' : 'data'}-${dateStamp()}.json`); }
+
+  // ── Optional auto-save to a real file on disk (File System Access API: Chrome, Edge, Opera) ──────
+  const canLinkFile = typeof window.showSaveFilePicker === 'function' && typeof window.showOpenFilePicker === 'function';
+  const fileLink = { handle: null, name: '', status: canLinkFile ? 'none' : 'unsupported', lastWrite: null };
+  const FILE_TYPES = [{ description: 'AMF data file', accept: { 'application/json': ['.json'] } }];
+  let fileTimer = 0, fileQueue = Promise.resolve(), storageState = 'unknown';
+  const handleDb = () => new Promise((resolve, reject) => { const req = indexedDB.open('amf-files', 1); req.onupgradeneeded = () => req.result.createObjectStore('handles'); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  async function rememberHandle(handle) {
+    let db;
+    try {
+      db = await handleDb();
+      await new Promise((resolve, reject) => { const tx = db.transaction('handles', 'readwrite'); if (handle) tx.objectStore('handles').put(handle, 'data'); else tx.objectStore('handles').delete('data'); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+    } catch (err) { console.error('AMF: could not remember the data file', err); }
+    finally { db?.close(); }
+  }
+  async function recallHandle() {
+    let db;
+    try { db = await handleDb(); return await new Promise((resolve, reject) => { const req = db.transaction('handles').objectStore('handles').get('data'); req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error); }); }
+    catch { return null; }
+    finally { db?.close(); }
+  }
+  function queueFileWrite() {
+    if (!fileLink.handle || fileLink.status !== 'linked') return;
+    clearTimeout(fileTimer); fileTimer = setTimeout(() => { fileQueue = fileQueue.then(writeDataFile); }, 250);
+  }
+  async function writeDataFile() {
+    if (!fileLink.handle) return false;
+    try {
+      const writable = await fileLink.handle.createWritable();
+      await writable.write(JSON.stringify(toDataFile(), null, 2)); await writable.close();
+      fileLink.lastWrite = new Date(); refreshFileUi(); return true;
+    } catch (err) {
+      console.error('AMF: could not write the data file', err);
+      fileLink.status = 'needs-permission'; refreshFileUi();
+      toast('Could not write to the data file. Reconnect it in Settings. Your data is still saved in this browser.');
+      return false;
+    }
+  }
+  function footNote() { return fileLink.status === 'linked' ? `Auto-saved to ${fileLink.name}` : 'Data stays on this device'; }
+  function fileBannerInner() {
+    return fileLink.status === 'needs-permission' ? `<section class="reminder-banner file-banner"><div><b>Your data file is not connected</b><small>${esc(fileLink.name)} needs your permission again in this session. Until then, changes are saved in this browser only.</small></div><button class="button small primary" data-action="file-reconnect">Reconnect</button></section>` : '';
+  }
+  function fileStatusHtml() {
+    const st = fileLink.status, name = esc(fileLink.name);
+    const text = st === 'unsupported' ? 'This browser cannot save to a file automatically (Chrome, Edge and Opera can). Your data is kept in this browser; download the data file regularly to be safe.'
+      : st === 'linked' ? `Saving automatically to <b>${name}</b>${fileLink.lastWrite ? ` · last written ${esc(fileLink.lastWrite.toLocaleTimeString())}` : ''}. Every change you make is written to it.`
+      : st === 'needs-permission' ? `<b>${name}</b> is linked but needs your permission again in this session. Until then, changes are saved in this browser only.`
+      : 'No data file is linked yet. Everything is stored in this browser only, which can be cleared by the browser, a private window, or opening the app from a different address.';
+    const buttons = st === 'unsupported' ? '' : st === 'linked' ? '<button class="button ghost" data-action="file-unlink">Stop saving to this file</button>'
+      : st === 'needs-permission' ? '<button class="button primary" data-action="file-reconnect">Reconnect</button><button class="button ghost" data-action="file-unlink">Unlink</button>'
+      : '<button class="button primary" data-action="file-create">Create a data file…</button><button class="button ghost" data-action="file-open">Open an existing data file…</button>';
+    const storage = storageState === 'protected' ? 'Browser storage is protected from automatic cleanup.' : storageState === 'unprotected' ? 'The browser may clear this site\'s storage when disk space runs low.' : '';
+    return `<p>${text}</p>${buttons ? `<div class="modal-actions left">${buttons}</div>` : ''}${storage ? `<p class="form-hint">${storage}${storageState === 'unprotected' ? ' <button class="button small ghost" data-action="storage-persist">Ask the browser to protect it</button>' : ''}</p>` : ''}`;
+  }
+  function refreshFileUi() {
+    const banner = document.querySelector('#file-banner'); if (banner) banner.innerHTML = fileBannerInner();
+    const panel = document.querySelector('#file-panel'); if (panel) panel.innerHTML = fileStatusHtml();
+    const foot = document.querySelector('#foot-note'); if (foot) foot.textContent = footNote();
+  }
+  function dataFilePanel() {
+    return `<div class="panel wide-panel"><span class="eyebrow">DATA FILE & BACKUPS</span><h3>Keep your records in a JSON file</h3><p class="muted">One file holds every supplier with its own list of fragrances (a fragrance sold by two suppliers is listed under each, separately), plus your customers, invoices and settings.</p><div id="file-panel">${fileStatusHtml()}</div><hr><div class="modal-actions left"><button class="button ghost" data-action="export-backup">Download data file</button><button class="button ghost" data-action="export-catalog-json">Download catalog only</button><button class="button ghost" data-action="import-backup">Import a data file…</button></div><p class="form-hint">"Catalog only" leaves out customers, invoices and settings, so it is safe to share or to commit to GitHub. Importing it replaces the catalogs and keeps your customers and invoices.</p></div>`;
+  }
+  async function linkNewFile() {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: 'amf-data.json', types: FILE_TYPES });
+      Object.assign(fileLink, { handle, name: handle.name, status: 'linked' }); await rememberHandle(handle);
+      if (await writeDataFile()) toast(`Saving automatically to ${handle.name}`);
+    } catch (err) { if (err?.name !== 'AbortError') { console.error(err); toast('Could not create the data file'); } }
+  }
+  async function linkExistingFile() {
+    try {
+      const [handle] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
+      const text = (await (await handle.getFile()).text()).trim();
+      let parsed = null;
+      if (text) {
+        try { parsed = parseDataFile(JSON.parse(text)); } catch (err) { return toast(err instanceof SyntaxError ? 'That file is not valid JSON' : err.message); }
+        if (parsed.kind !== 'full') return toast('That is a catalog-only file. Choose a full data file, or create a new one.');
+        if (!confirm(`Load the data in ${handle.name} and keep saving to it?\n\n${dataSummary(parsed)}\n\nThis replaces the data currently in this browser.`)) return;
+        state = stateFromDataFile(parsed); document.documentElement.dataset.theme = state.settings.theme || 'light';
+      }
+      Object.assign(fileLink, { handle, name: handle.name, status: 'linked' }); await rememberHandle(handle);
+      save(); render(); toast(parsed ? `Loaded ${handle.name}. Changes are now saved to it automatically` : `Saving automatically to ${handle.name}`);
+    } catch (err) { if (err?.name !== 'AbortError') { console.error(err); toast('Could not open the data file'); } }
+  }
+  async function unlinkFile() {
+    Object.assign(fileLink, { handle: null, name: '', status: canLinkFile ? 'none' : 'unsupported' }); await rememberHandle(null);
+    refreshFileUi(); toast('The data file is no longer linked. The file itself was not deleted');
+  }
+  // Compares the linked file with this browser's data and keeps the newer one.
+  async function syncFromFile() {
+    let text = '';
+    try { text = (await (await fileLink.handle.getFile()).text()).trim(); } catch (err) { console.error(err); fileLink.status = 'needs-permission'; refreshFileUi(); return; }
+    if (!text) { await writeDataFile(); return; }
+    let parsed; try { parsed = parseDataFile(JSON.parse(text)); if (parsed.kind !== 'full') throw new Error('catalog'); } catch {
+      const name = fileLink.name; fileLink.handle = null; fileLink.status = 'none'; fileLink.name = ''; await rememberHandle(null); refreshFileUi();
+      toast(`${name} is not a valid AMF data file. It was left untouched and is no longer linked.`); return;
+    }
+    const fileTime = Date.parse(parsed.savedAt || '') || 0, localTime = Date.parse(state.savedAt || '') || 0;
+    if (fileTime > localTime && (!localTime || confirm(`${fileLink.name} has newer data (saved ${new Date(fileTime).toLocaleString()}) than this browser (saved ${new Date(localTime).toLocaleString()}).\n\nLoad the data from the file?\n\nCancel keeps this browser's data and overwrites the file with it.`))) {
+      state = stateFromDataFile(parsed); document.documentElement.dataset.theme = state.settings.theme || 'light';
+      if (!save()) saveFailed = false; render(); toast(`Loaded your latest data from ${fileLink.name}`); return;
+    }
+    await writeDataFile();
+  }
+  async function reconnectFile() {
+    if (!fileLink.handle) return;
+    try {
+      if (await fileLink.handle.requestPermission({ mode: 'readwrite' }) !== 'granted') return toast('Permission was not granted');
+      fileLink.status = 'linked'; await syncFromFile(); refreshFileUi();
+    } catch (err) { console.error(err); toast('Could not reconnect the data file'); }
+  }
+  // Fresh browser with no saved data: start from data/amf-data.json (catalog-only files) when the app is served over http(s) and the file exists.
+  async function loadProjectData() {
+    try {
+      if (localStorage.getItem(KEY) || typeof fetch !== 'function' || !/^https?:$/.test(location.protocol)) return;
+      const res = await fetch('data/amf-data.json', { cache: 'no-store' }); if (!res.ok) return;
+      const parsed = parseDataFile(await res.json());
+      if (parsed.kind !== 'catalog') { console.warn('AMF: data/amf-data.json holds customers and invoices, so it was ignored. Use "Download catalog only" to make a shareable file.'); toast('data/amf-data.json contains customers and invoices, so it was ignored. Use "Download catalog only" for a shareable file.'); return; }
+      state = stateFromDataFile(parsed); save(); render(); toast('Started from the catalog file that ships with this app');
+    } catch { /* no project data file, or it is not valid: keep the built-in catalog */ }
+  }
+  async function initDataFile() {
+    try { if (navigator.storage?.persisted) storageState = (await navigator.storage.persisted()) ? 'protected' : 'unprotected'; } catch { storageState = 'unknown'; }
+    if (canLinkFile) {
+      const handle = await recallHandle();
+      if (handle) {
+        fileLink.handle = handle; fileLink.name = handle.name;
+        let permission = 'prompt'; try { permission = await handle.queryPermission({ mode: 'readwrite' }); } catch { /* ask again later */ }
+        if (permission === 'granted') { fileLink.status = 'linked'; await syncFromFile(); } else fileLink.status = 'needs-permission';
+      }
+    }
+    refreshFileUi();
+  }
+
+  // ── Suppliers: add / remove ──────────────────────────────────────────────────────────────────────
+  function supplierAddHtml() {
+    const extras = allCompanies().filter(c => !BASE_COMPANIES.some(b => b.id === c.id));
+    return `<hr><h3>Add a supplier</h3><p class="muted">Need more than four? Every supplier keeps its own list of fragrances, even when another supplier sells the same one.</p><form id="supplier-add-form" class="form"><div class="form-cols"><label>Supplier name<input name="name" required></label><label>Note<input name="note" placeholder="Made in France"></label></div><button class="button ghost" type="submit">Add supplier</button></form>${extras.map(c => `<div class="supplier-extra"><span><b>${esc(supplierName(c.id))}</b><small>${state.products.filter(p => p.companyId === c.id).length} fragrances</small></span><button class="button small ghost" data-action="remove-supplier" data-id="${esc(c.id)}">Remove</button></div>`).join('')}`;
   }
 
   function stockLabel(p) { return p.stock == null || p.stock === '' ? 'Stock not set' : p.stock > 0 ? `${p.stock} in stock` : 'Out of stock'; }
@@ -282,16 +479,12 @@
     const reader = new FileReader();
     reader.onerror = () => toast('Could not read that file');
     reader.onload = () => {
-      let parsed; try { parsed = JSON.parse(reader.result); } catch { return toast('That file is not valid JSON'); }
-      const valid = parsed && typeof parsed === 'object' && Array.isArray(parsed.products) && Array.isArray(parsed.customers) && Array.isArray(parsed.orders)
-        && parsed.products.every(p => p && typeof p.id === 'string' && typeof p.companyId === 'string')
-        && parsed.customers.every(c => c && typeof c.id === 'string' && typeof c.name === 'string')
-        && parsed.orders.every(o => o && typeof o.id === 'string' && Array.isArray(o.items));
-      if (!valid) return toast('That file is not an AMF backup');
-      if (!confirm(`Replace ALL current data with this backup?\n\n${parsed.products.length} fragrances · ${parsed.customers.length} customers · ${parsed.orders.length} invoices\n\nThis cannot be undone. Export a backup of your current data first if you are unsure.`)) return;
-      const previous = state; state = normalize(parsed);
-      if (!save()) { state = previous; saveFailed = false; return toast('That backup is too large to store in this browser'); }
-      document.documentElement.dataset.theme = state.settings.theme || 'light'; render(); toast('Backup restored');
+      let parsed; try { parsed = parseDataFile(JSON.parse(reader.result)); } catch (err) { return toast(err instanceof SyntaxError ? 'That file is not valid JSON' : err.message); }
+      const question = parsed.kind === 'catalog' ? 'Replace the fragrance catalogs with this file?\n\nYour customers, invoices and settings are kept.' : 'Replace ALL current data with this file?';
+      if (!confirm(`${question}\n\n${dataSummary(parsed)}\n\nThis cannot be undone. Download a data file of your current data first if you are unsure.`)) return;
+      const previous = state; state = stateFromDataFile(parsed);
+      if (!save()) { state = previous; saveFailed = false; return toast('That file is too large to store in this browser'); }
+      document.documentElement.dataset.theme = state.settings.theme || 'light'; render(); toast(parsed.kind === 'catalog' ? 'Catalogs loaded' : 'Data file loaded');
     };
     reader.readAsText(file);
   }
@@ -304,7 +497,14 @@
     pending.forEach(img => { img.addEventListener('load', finish, { once: true }); img.addEventListener('error', finish, { once: true }); });
     setTimeout(go, 4000);
   }
-  function company(id) { return companies.find(c => c.id === id) || companies[0]; }
+  // The four built-in suppliers plus any added in Settings (their names and notes live in state.companyMeta).
+  const EXTRA_COLORS = ['#7fb0c9', '#d3a06a', '#a3b87a', '#c88fb0', '#8fb7a0', '#b9a37c'];
+  function allCompanies() {
+    const known = new Set(BASE_COMPANIES.map(c => c.id));
+    const extra = Object.keys(state.companyMeta || {}).filter(id => !known.has(id)).map((id, i) => ({ id, name: state.companyMeta[id]?.name || id, note: state.companyMeta[id]?.note || '', color: EXTRA_COLORS[i % EXTRA_COLORS.length] }));
+    return [...BASE_COMPANIES, ...extra];
+  }
+  function company(id) { return allCompanies().find(c => c.id === id) || BASE_COMPANIES[0]; }
   function product(id) { return state.products.find(p => p.id === id); }
   function customer(id) { return state.customers.find(c => c.id === id); }
   function navigate(path) { location.hash = path; }
@@ -317,7 +517,7 @@
   }
   function icon(symbol) { return `<span class="icon">${symbol}</span>`; }
   function trademarkName(value) { const name = String(value || 'Al Madina Fragrances'); return /[®]$/.test(name) ? name : `${name}®`; }
-  function supplierOptions(selected = 'arabian') { return companies.map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(state.companyMeta[c.id]?.name || c.name)}</option>`).join(''); }
+  function supplierOptions(selected = 'arabian') { return allCompanies().map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(state.companyMeta[c.id]?.name || c.name)}</option>`).join(''); }
   function productOptions(companyId = 'arabian', selected = '', query = '') { const needle = query.trim().toLowerCase(); return state.products.filter(p => p.companyId === companyId && (!needle || `${p.name} ${p.code} ${p.serial}`.toLowerCase().includes(needle))).map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)} · ${esc(p.serial)} · ${money(p.price25g)}/25g</option>`).join(''); }
 
   function layout(content, active = 'dashboard') {
@@ -326,8 +526,8 @@
       <nav><small class="nav-label">Workspace</small>
         ${nav('dashboard', '⌂', 'Overview', active)}${nav('catalog/arabian', '◈', 'Catalogs', active)}${nav('customers', '♙', 'Customers', active)}${nav('billing', '▤', 'Billing & invoices', active)}${nav('reminders', '✉', 'Reminders', active, dueReminders().length)}
         <small class="nav-label">Manage</small>${nav('settings', '⚙', 'Settings', active)}
-      </nav><div class="sidebar-foot"><span class="status-dot"></span> Local & private<br><small>Data stays on this device</small></div></aside>
-      <main class="main"><header class="topbar"><div><span class="eyebrow">PERSONAL BUSINESS DESK</span><h1>${pageTitle()}</h1></div><div class="top-actions"><button class="button ghost theme-toggle" data-action="toggle-theme" aria-label="Switch to ${state.settings.theme === 'dark' ? 'light' : 'dark'} mode">${state.settings.theme === 'dark' ? '☼' : '◐'} <span>${state.settings.theme === 'dark' ? 'Light' : 'Dark'} mode</span></button><button class="button ghost" data-action="export-backup">Export backup</button><button class="button ghost" data-action="import-backup">Import backup</button><input type="file" id="backup-file" accept="application/json,.json" hidden><button class="button primary" data-action="quick-order">＋ New invoice</button></div></header>${content}</main><div id="toast" class="toast"></div></div>`;
+      </nav><div class="sidebar-foot"><span class="status-dot"></span> Local & private<br><small id="foot-note">${esc(footNote())}</small></div></aside>
+      <main class="main"><header class="topbar"><div><span class="eyebrow">PERSONAL BUSINESS DESK</span><h1>${pageTitle()}</h1></div><div class="top-actions"><button class="button ghost theme-toggle" data-action="toggle-theme" aria-label="Switch to ${state.settings.theme === 'dark' ? 'light' : 'dark'} mode">${state.settings.theme === 'dark' ? '☼' : '◐'} <span>${state.settings.theme === 'dark' ? 'Light' : 'Dark'} mode</span></button><button class="button ghost" data-action="export-backup">Export backup</button><button class="button ghost" data-action="import-backup">Import backup</button><input type="file" id="backup-file" accept="application/json,.json" hidden><button class="button primary" data-action="quick-order">＋ New invoice</button></div></header><div id="file-banner">${fileBannerInner()}</div>${content}</main><div id="toast" class="toast"></div></div>`;
   }
   function nav(path, sym, label, active, badge = 0) { return `<a class="${active === path.split('/')[0] ? 'active' : ''}" href="#/${path}">${icon(sym)}${label}${badge ? `<em class="nav-badge" aria-label="${badge} due">${badge}</em>` : ''}</a>`; }
   function pageTitle() { if (route.startsWith('/catalog')) return 'Supplier catalogs'; if (route.startsWith('/customers')) return 'Customers'; if (route.startsWith('/billing')) return 'Billing & invoices'; if (route.startsWith('/reminders')) return 'Payment reminders'; if (route.startsWith('/settings')) return 'Settings'; const hour = new Date().getHours(); return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'; }
@@ -349,12 +549,12 @@
     const sold = state.orders.length, outstanding = state.orders.reduce((s, o) => s + (o.total - o.paid), 0);
     const recent = [...state.orders].reverse().slice(0, 5);
     return `<section class="hero"><div><span class="eyebrow">YOUR FRAGRANCE LEDGER</span><h2>Every scent,<br><em>beautifully accounted for.</em></h2><p>Manage your private collection, suppliers, customers and invoices in one calm workspace.</p><button class="button primary" data-action="quick-order">Create an invoice ${icon('→')}</button></div><div class="hero-art"><div class="bottle"><i></i><strong>AMF</strong><small>PERFUME</small></div></div></section>
-      ${reminderBanner()}<section class="stats"><article><span class="stat-icon gold">◈</span><small>Total fragrances</small><strong>${state.products.length}</strong><em>across ${companies.length} suppliers</em></article><article><span class="stat-icon sage">♙</span><small>Customers</small><strong>${state.customers.length}</strong><em>records saved locally</em></article><article><span class="stat-icon rose">▤</span><small>Invoices</small><strong>${sold}</strong><em>${money(outstanding)} outstanding</em></article></section>
-      <section class="split"><div class="panel"><div class="panel-head"><div><span class="eyebrow">SUPPLIERS</span><h3>Browse catalogs</h3></div><a href="#/catalog/arabian">View all →</a></div><div class="company-list">${companies.map(c => `<a class="company-row" href="#/catalog/${c.id}"><span class="company-avatar" style="--accent:${c.color}">${esc(supplierInitial(c.id))}</span><span><b>${esc(state.companyMeta[c.id]?.name || c.name)}</b><small>${state.products.filter(p => p.companyId === c.id).length} fragrances · ${esc(state.companyMeta[c.id]?.note || '')}</small></span>${icon('→')}</a>`).join('')}</div></div><div class="panel"><div class="panel-head"><div><span class="eyebrow">RECENT ACTIVITY</span><h3>Latest invoices</h3></div><a href="#/billing">See all →</a></div>${recent.length ? recent.map(o => `<a class="activity-row" href="#/billing"><span class="receipt">▤</span><span><b>${esc(o.number)}</b><small>${esc(o.customerName)}</small></span><strong>${money(o.total)}</strong></a>`).join('') : `<div class="empty-mini">${icon('◌')}<p>No invoices yet.<br>Create your first one above.</p></div>`}</div></section>`;
+      ${reminderBanner()}<section class="stats"><article><span class="stat-icon gold">◈</span><small>Total fragrances</small><strong>${state.products.length}</strong><em>across ${allCompanies().length} suppliers</em></article><article><span class="stat-icon sage">♙</span><small>Customers</small><strong>${state.customers.length}</strong><em>records saved locally</em></article><article><span class="stat-icon rose">▤</span><small>Invoices</small><strong>${sold}</strong><em>${money(outstanding)} outstanding</em></article></section>
+      <section class="split"><div class="panel"><div class="panel-head"><div><span class="eyebrow">SUPPLIERS</span><h3>Browse catalogs</h3></div><a href="#/catalog/arabian">View all →</a></div><div class="company-list">${allCompanies().map(c => `<a class="company-row" href="#/catalog/${c.id}"><span class="company-avatar" style="--accent:${c.color}">${esc(supplierInitial(c.id))}</span><span><b>${esc(state.companyMeta[c.id]?.name || c.name)}</b><small>${state.products.filter(p => p.companyId === c.id).length} fragrances · ${esc(state.companyMeta[c.id]?.note || '')}</small></span>${icon('→')}</a>`).join('')}</div></div><div class="panel"><div class="panel-head"><div><span class="eyebrow">RECENT ACTIVITY</span><h3>Latest invoices</h3></div><a href="#/billing">See all →</a></div>${recent.length ? recent.map(o => `<a class="activity-row" href="#/billing"><span class="receipt">▤</span><span><b>${esc(o.number)}</b><small>${esc(o.customerName)}</small></span><strong>${money(o.total)}</strong></a>`).join('') : `<div class="empty-mini">${icon('◌')}<p>No invoices yet.<br>Create your first one above.</p></div>`}</div></section>`;
   }
   function catalogPage(cid) {
     cid = company(cid).id; const c = company(cid), items = state.products.filter(p => p.companyId === cid);
-    return `<section class="catalog-toolbar"><div class="company-switcher">${companies.map(x => `<a class="${x.id === cid ? 'selected' : ''}" href="#/catalog/${x.id}"><span style="--accent:${x.color}">${esc(supplierInitial(x.id))}</span>${esc(state.companyMeta[x.id]?.name || x.name)} <b>${state.products.filter(p => p.companyId === x.id).length}</b></a>`).join('')}</div><button class="button primary" data-action="add-product" data-company="${cid}">＋ Add fragrance</button></section>
+    return `<section class="catalog-toolbar"><div class="company-switcher">${allCompanies().map(x => `<a class="${x.id === cid ? 'selected' : ''}" href="#/catalog/${x.id}"><span style="--accent:${x.color}">${esc(supplierInitial(x.id))}</span>${esc(state.companyMeta[x.id]?.name || x.name)} <b>${state.products.filter(p => p.companyId === x.id).length}</b></a>`).join('')}</div><button class="button primary" data-action="add-product" data-company="${cid}">＋ Add fragrance</button></section>
       <section class="catalog-head"><div><span class="eyebrow">${esc(state.companyMeta[cid]?.note || c.note)}</span><h2>${esc(state.companyMeta[cid]?.name || c.name)}</h2><p>Prices and metrics are shown only inside this supplier catalog.</p></div><div class="catalog-tools"><label class="search">${icon('⌕')}<input id="product-search" placeholder="Search name, code or serial…"></label><button class="button ghost" data-action="share-list" data-company="${cid}">Share list</button><button class="button ghost" data-action="export-catalog" data-company="${cid}">Export Excel</button><button class="button primary" data-action="export-catalog-pdf" data-company="${cid}">Download PDF</button></div></section>
       <div id="product-grid" class="product-grid">${items.map(productCard).join('')}</div><div id="catalog-empty" class="empty-state" hidden>${icon('⌕')}<h3>No matching fragrances</h3><p>Try a different search or add a new fragrance.</p></div>`;
   }
@@ -370,7 +570,7 @@
   }
   function orderRow(o) { const canDelete = o.paid >= o.total; return `<div class="order-row"><span class="receipt">▤</span><div class="order-info"><b>${esc(o.number)}</b><small>${new Date(o.date).toLocaleDateString()} · ${o.items.length} item${o.items.length === 1 ? '' : 's'}</small></div><strong>${money(o.total)}</strong><span class="balance ${o.total - o.paid > 0 ? 'due' : ''}">${o.total - o.paid ? `${money(o.total - o.paid)} due` : 'Paid'}</span><span class="invoice-actions"><button class="button small ghost" data-action="edit-invoice" data-id="${o.id}">Edit</button><button class="button small ghost" data-action="invoice" data-id="${o.id}">Invoice</button>${o.total - o.paid > 0 ? `<button class="button small ghost" data-action="send-reminder" data-id="${o.id}">Remind</button>` : ''}${canDelete ? '<button class="button small delete-icon" data-action="delete-invoice" data-id="' + o.id + '" aria-label="Delete paid invoice" title="Delete paid invoice">⌫</button>' : ''}</span></div>`; }
   function billingPage() { return `<section class="page-intro"><div><p>One invoice can combine products from all four suppliers.</p></div><button class="button primary" data-action="quick-order">＋ New invoice</button></section><div class="panel detail-panel">${state.orders.length ? [...state.orders].reverse().map(orderRow).join('') : `<div class="empty-state">${icon('▤')}<h3>No billing records yet</h3><p>Create an invoice with products from any company.</p></div>`}</div>`; }
-  function settingsPage() { return `<section class="settings-grid"><div class="panel"><span class="eyebrow">BRAND & BUSINESS</span><h3>Customize your workspace</h3><form id="settings-form" class="form"><label>Shop name<input name="name" value="${esc(state.settings.name)}"></label><label>Invoice name<input name="brand" value="${esc(state.settings.brand)}"></label><label>Phone<input name="phone" value="${esc(state.settings.phone)}"></label><label>Address<textarea name="address">${esc(state.settings.address)}</textarea></label><label>Logo<input name="logo" type="file" accept="image/*"><small>Upload your shop logo. It updates the workspace and every invoice.</small></label><button class="button primary" type="submit">Save settings</button></form></div><div class="panel"><span class="eyebrow">APPEARANCE & DATA</span><h3>Keep your desk comfortable</h3><p class="muted">Switch between calm light and dark modes without changing your brand colors.</p><button class="button ghost" data-action="toggle-theme">${state.settings.theme === 'dark' ? '☼ Use light mode' : '◐ Use dark mode'}</button><hr><h3>Your records are local</h3><p class="muted">Everything is stored in this browser. Export a backup regularly so you can move your records to another device.</p><button class="button ghost" data-action="export-backup">Download JSON backup</button><hr><h3>Supplier names</h3><form id="companies-form" class="form">${companies.map(c => `<label>${c.id === 'arabian' ? 'Supplier 1' : c.id.replace('company-', 'Supplier ')}<input name="${c.id}" value="${esc(state.companyMeta[c.id]?.name || c.name)}"></label>`).join('')}<button class="button ghost" type="submit">Save supplier names</button></form></div><div class="panel wide-panel"><span class="eyebrow">PAYMENT REMINDERS</span><h3>WhatsApp reminders for unpaid invoices</h3><form id="reminder-form" class="form"><div class="form-cols"><label>Remind after (days since the invoice)<input name="schedule" value="${esc(reminderSettings().schedule)}" placeholder="1, 2, 7"><small>1, 2, 7 means a first reminder the day after the invoice, a second on day 2 and a third on day 7.</small></label><label>Then repeat every (days)<input name="repeatEvery" type="number" min="0" max="365" step="1" value="${esc(reminderSettings().repeatEvery)}"><small>Use 0 to stop after the last reminder.</small></label></div><label>Country code for numbers saved without one<input name="countryCode" value="${esc(state.settings.countryCode || '92')}" inputmode="numeric"><small>With 92, the number 0300-1234567 becomes +92 300 1234567.</small></label><label>Message<textarea name="template" rows="6">${esc(reminderSettings().template)}</textarea><small>Available fields: {name} {invoice} {amount} {total} {paid} {date} {days} {shop}</small></label><div class="modal-actions"><button class="button ghost" type="button" data-action="reset-reminder-text">Reset message</button><button class="button primary" type="submit">Save reminder settings</button></div></form></div></section>`; }
+  function settingsPage() { return `<section class="settings-grid"><div class="panel"><span class="eyebrow">BRAND & BUSINESS</span><h3>Customize your workspace</h3><form id="settings-form" class="form"><label>Shop name<input name="name" value="${esc(state.settings.name)}"></label><label>Invoice name<input name="brand" value="${esc(state.settings.brand)}"></label><label>Phone<input name="phone" value="${esc(state.settings.phone)}"></label><label>Address<textarea name="address">${esc(state.settings.address)}</textarea></label><label>Logo<input name="logo" type="file" accept="image/*"><small>Upload your shop logo. It updates the workspace and every invoice.</small></label><button class="button primary" type="submit">Save settings</button></form></div><div class="panel"><span class="eyebrow">APPEARANCE & DATA</span><h3>Keep your desk comfortable</h3><p class="muted">Switch between calm light and dark modes without changing your brand colors.</p><button class="button ghost" data-action="toggle-theme">${state.settings.theme === 'dark' ? '☼ Use light mode' : '◐ Use dark mode'}</button><hr><h3>Your records are local</h3><p class="muted">Everything is stored in this browser. Export a backup regularly so you can move your records to another device.</p><button class="button ghost" data-action="export-backup">Download JSON backup</button><hr><h3>Supplier names</h3><form id="companies-form" class="form">${allCompanies().map(c => `<label>${c.id === 'arabian' ? 'Supplier 1' : c.id.replace('company-', 'Supplier ')}<input name="${c.id}" value="${esc(state.companyMeta[c.id]?.name || c.name)}"></label>`).join('')}<button class="button ghost" type="submit">Save supplier names</button></form>${supplierAddHtml()}</div>${dataFilePanel()}<div class="panel wide-panel"><span class="eyebrow">PAYMENT REMINDERS</span><h3>WhatsApp reminders for unpaid invoices</h3><form id="reminder-form" class="form"><div class="form-cols"><label>Remind after (days since the invoice)<input name="schedule" value="${esc(reminderSettings().schedule)}" placeholder="1, 2, 7"><small>1, 2, 7 means a first reminder the day after the invoice, a second on day 2 and a third on day 7.</small></label><label>Then repeat every (days)<input name="repeatEvery" type="number" min="0" max="365" step="1" value="${esc(reminderSettings().repeatEvery)}"><small>Use 0 to stop after the last reminder.</small></label></div><label>Country code for numbers saved without one<input name="countryCode" value="${esc(state.settings.countryCode || '92')}" inputmode="numeric"><small>With 92, the number 0300-1234567 becomes +92 300 1234567.</small></label><label>Message<textarea name="template" rows="6">${esc(reminderSettings().template)}</textarea><small>Available fields: {name} {invoice} {amount} {total} {paid} {date} {days} {shop}</small></label><div class="modal-actions"><button class="button ghost" type="button" data-action="reset-reminder-text">Reset message</button><button class="button primary" type="submit">Save reminder settings</button></div></form></div></section>`; }
 
   function openModal(html, cls = '') { document.querySelector('.modal-backdrop')?.remove(); const el = document.createElement('div'); el.className = `modal-backdrop ${cls}`; el.innerHTML = `<div class="modal">${html}<button class="modal-close" data-close>×</button></div>`; document.body.appendChild(el); el.querySelector('input:not([type="hidden"]), textarea, select')?.focus(); return el; }
   function productModal(id) { const p = product(id); if (!p) { toast('This fragrance is no longer available'); return; } const c = state.companyMeta[p.companyId]?.name || company(p.companyId).name; openModal(`<span class="eyebrow">${esc(c)} · ${esc(p.serial)}</span><h2>${esc(p.name)}</h2><div class="detail-grid">${[['Supplier', c], ['Serial number', p.serial], ['Code', p.code], ['Price / kg', money(p.priceKg)], ['Price / gram', money(p.perGram)], ['Price / 25g', money(p.price25g)], ['Price / 100g', money(p.price100g)], ['Size / weight', p.size || 'Not supplied'], ['Stock', p.stock == null || p.stock === '' ? 'Not set' : p.stock > 0 ? p.stock : 'Out of stock'], ['Notes', p.notes || '—']].map(x => `<div><small>${esc(x[0])}</small><strong>${esc(x[1])}</strong></div>`).join('')}</div><div class="modal-actions"><button class="button ghost" data-action="share-product" data-id="${id}">Share</button><button class="button ghost" data-action="edit-product" data-id="${id}">Edit</button><button class="button danger" data-action="delete-product" data-id="${id}">Remove</button></div>`); }
@@ -381,7 +581,7 @@
   }
   function invoiceCustomer(data) { if (data.customerId !== '__new__') return customer(data.customerId); const key = data.newKey?.trim(), name = data.newName?.trim(); if (!key || !name) { toast('Enter a customer key and name'); return null; } if (state.customers.some(c => c.key.toLowerCase() === key.toLowerCase())) { toast('That customer key already exists'); return null; } const newCustomer = { id: `customer-${Date.now()}`, key, name, phone: data.newPhone?.trim() || '', account: data.newAccount?.trim() || '', address: data.newAddress?.trim() || '' }; state.customers.push(newCustomer); return newCustomer; }
   function invoiceLineHtml(companyId = 'arabian', productId = '', qty = 1, price = '', snap = null) { return `<div class="invoice-line"><select name="companyId" aria-label="Supplier">${supplierOptions(companyId)}</select><input class="invoice-search" type="search" placeholder="Search fragrance…" aria-label="Search fragrance"><select name="productId" required aria-label="Fragrance"><option value="">Select fragrance…</option>${productOptions(companyId, productId)}${productId && snap && !product(productId) ? `<option value="${esc(productId)}" selected>${esc(snap.name)} · ${esc(snap.serial)} · no longer in catalog</option>` : ''}</select><input name="qty" type="number" min="1" step="1" value="${qty}" aria-label="Quantity"><input name="price" type="number" min="0" step="0.01" value="${price}" placeholder="${esc(product(productId)?.price25g ?? 'Price')}" aria-label="Price"><button class="line-remove" type="button" data-action="remove-line" aria-label="Remove item" title="Remove item">×</button></div>`; }
-  function invoiceForm(customerId = '', orderId = '') { const order = orderId ? state.orders.find(o => o.id === orderId) : null, selectedCustomer = order?.customerId || customerId, hasSelectedCustomer = state.customers.some(c => c.id === selectedCustomer), customerOptions = state.customers.length ? `<optgroup label="Existing customers">${state.customers.map(c => `<option value="${c.id}" ${c.id === selectedCustomer ? 'selected' : ''}>${esc(c.key)} · ${esc(c.name)}</option>`).join('')}</optgroup>` : '', lines = order ? order.items.map(i => invoiceLineHtml(product(i.productId)?.companyId || companies.find(c => supplierName(c.id) === i.company)?.id || 'arabian', i.productId, i.qty, i.price, i)).join('') : invoiceLineHtml(); openModal(`<span class="eyebrow">MIXED-COMPANY ORDER</span><h2>${order ? 'Edit invoice' : 'Create invoice'}</h2><form id="invoice-form" class="form"><input type="hidden" name="orderId" value="${esc(orderId)}"><label>Customer<select name="customerId" required><option value="__new__" ${hasSelectedCustomer ? '' : 'selected'}>＋ Create new customer</option>${customerOptions}</select></label><div class="invoice-new-customer" ${hasSelectedCustomer ? 'hidden' : ''}><span class="invoice-help">Create the customer while preparing this invoice.</span><div class="form-cols"><label>Customer key<input name="newKey" placeholder="001-abbas"></label><label>Full name<input name="newName" placeholder="Customer name"></label></div><div class="form-cols"><label>Phone<input name="newPhone"></label><label>Account number<input name="newAccount"></label></div><label>Address<textarea name="newAddress"></textarea></label></div><p class="invoice-help">Choose an existing customer or create a new one, then choose the supplier and fragrance.</p><div id="invoice-lines">${lines}</div><button class="button ghost" type="button" data-action="add-line">＋ Add another item</button><label>Payment received<input name="paid" type="number" min="0" step="0.01" value="${order?.paid || 0}"></label><label>Notes<textarea name="notes">${esc(order?.notes || '')}</textarea></label><button class="button primary" type="submit">${order ? 'Save invoice changes' : 'Save invoice & print'}</button></form>`, 'wide'); }
+  function invoiceForm(customerId = '', orderId = '') { const order = orderId ? state.orders.find(o => o.id === orderId) : null, selectedCustomer = order?.customerId || customerId, hasSelectedCustomer = state.customers.some(c => c.id === selectedCustomer), customerOptions = state.customers.length ? `<optgroup label="Existing customers">${state.customers.map(c => `<option value="${c.id}" ${c.id === selectedCustomer ? 'selected' : ''}>${esc(c.key)} · ${esc(c.name)}</option>`).join('')}</optgroup>` : '', lines = order ? order.items.map(i => invoiceLineHtml(product(i.productId)?.companyId || allCompanies().find(c => supplierName(c.id) === i.company)?.id || 'arabian', i.productId, i.qty, i.price, i)).join('') : invoiceLineHtml(); openModal(`<span class="eyebrow">MIXED-COMPANY ORDER</span><h2>${order ? 'Edit invoice' : 'Create invoice'}</h2><form id="invoice-form" class="form"><input type="hidden" name="orderId" value="${esc(orderId)}"><label>Customer<select name="customerId" required><option value="__new__" ${hasSelectedCustomer ? '' : 'selected'}>＋ Create new customer</option>${customerOptions}</select></label><div class="invoice-new-customer" ${hasSelectedCustomer ? 'hidden' : ''}><span class="invoice-help">Create the customer while preparing this invoice.</span><div class="form-cols"><label>Customer key<input name="newKey" placeholder="001-abbas"></label><label>Full name<input name="newName" placeholder="Customer name"></label></div><div class="form-cols"><label>Phone<input name="newPhone"></label><label>Account number<input name="newAccount"></label></div><label>Address<textarea name="newAddress"></textarea></label></div><p class="invoice-help">Choose an existing customer or create a new one, then choose the supplier and fragrance.</p><div id="invoice-lines">${lines}</div><button class="button ghost" type="button" data-action="add-line">＋ Add another item</button><label>Payment received<input name="paid" type="number" min="0" step="0.01" value="${order?.paid || 0}"></label><label>Notes<textarea name="notes">${esc(order?.notes || '')}</textarea></label><button class="button primary" type="submit">${order ? 'Save invoice changes' : 'Save invoice & print'}</button></form>`, 'wide'); }
   function lineHtml() { return invoiceLineHtml(); }
   function exportRows(rows, filename) { const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n'); download(new Blob(['\uFEFF' + csv], { type: 'application/vnd.ms-excel;charset=utf-8' }), `${filename}.xls`); }
   function exportCatalog(cid) { const ps = state.products.filter(p => p.companyId === cid), supplierName = state.companyMeta[cid]?.name || company(cid).name; exportRows([['Serial', 'Supplier', 'Name', 'Code', 'Price/kg', 'Price/gram', 'Price/25g', 'Price/100g', 'Size/weight', 'Stock', 'Notes'], ...ps.map(p => [p.serial, supplierName, p.name, p.code, p.priceKg, p.perGram, p.price25g, p.price100g, p.size, p.stock, p.notes])], `${supplierName}-catalog`); }
@@ -403,6 +603,18 @@
   document.addEventListener('click', e => {
     const a = e.target.closest('[data-action]'); if (!a) return; const action = a.dataset.action;
     if (action === 'toggle-sidebar' || action === 'close-sidebar') { document.body.classList.toggle('sidebar-open', action === 'toggle-sidebar'); const toggle = document.querySelector('.menu-toggle'); if (toggle) toggle.setAttribute('aria-expanded', String(document.body.classList.contains('sidebar-open'))); } if (action === 'quick-order') invoiceForm(a.dataset.customer || ''); if (action === 'toggle-theme') { state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = state.settings.theme; save(); render(); } if (action === 'edit-invoice') invoiceForm('', a.dataset.id); if (action === 'delete-invoice') { const order = state.orders.find(o => o.id === a.dataset.id); if (order && order.paid >= order.total && confirm('Delete this paid invoice permanently?')) { state.orders = state.orders.filter(o => o.id !== order.id); save(); render(); toast('Invoice deleted'); } } if (action === 'add-customer') customerForm(); if (action === 'edit-customer') customerForm(a.dataset.id); if (action === 'delete-customer') deleteCustomer(a.dataset.id); if (action === 'import-backup') document.querySelector('#backup-file')?.click(); if (action === 'remove-line') removeLine(a);
+    if (action === 'export-catalog-json') exportData(true);
+    if (action === 'file-create') linkNewFile();
+    if (action === 'file-open') linkExistingFile();
+    if (action === 'file-unlink') unlinkFile();
+    if (action === 'file-reconnect') reconnectFile();
+    if (action === 'storage-persist') { navigator.storage.persist().then(ok => { storageState = ok ? 'protected' : 'unprotected'; refreshFileUi(); toast(ok ? 'Browser storage is now protected' : 'The browser did not grant extra protection. Link a data file instead'); }); }
+    if (action === 'remove-supplier') {
+      const id = a.dataset.id, count = state.products.filter(p => p.companyId === id).length;
+      if (BASE_COMPANIES.some(c => c.id === id)) return;
+      if (count) return toast(`Remove its ${count} fragrance${count === 1 ? '' : 's'} first`);
+      if (confirm(`Remove ${supplierName(id)}?`)) { delete state.companyMeta[id]; save(); render(); toast('Supplier removed'); }
+    }
     if (action === 'share-list') shareForm({ supplier: a.dataset.company });
     if (action === 'share-product') { document.querySelector('.modal-backdrop')?.remove(); shareForm({ ids: [a.dataset.id], supplier: product(a.dataset.id)?.companyId }); }
     if (action === 'share-customer') shareForm({ customerId: a.dataset.id });
@@ -415,7 +627,7 @@
     if (action === 'send-reminder') sendReminder(a.dataset.id);
     if (action === 'snooze-reminder') { const o = state.orders.find(x => x.id === a.dataset.id); if (o) { o.snoozeUntil = new Date(Date.now() + DAY).toISOString(); save(); render(); toast('Reminder moved to tomorrow'); } }
     if (action === 'toggle-reminders') { const o = state.orders.find(x => x.id === a.dataset.id); if (o) { o.noReminders = !o.noReminders; if (!o.noReminders) delete o.noReminders; save(); render(); toast(o.noReminders ? 'Reminders stopped for this invoice' : 'Reminders resumed'); } }
-    if (action === 'reset-reminder-text') { const t = document.querySelector('#reminder-form [name="template"]'); if (t) t.value = DEFAULT_REMINDER_TEXT; } if (action === 'product-detail') productModal(a.dataset.id); if (action === 'add-product') productForm(a.dataset.company); if (action === 'edit-product') { document.querySelector('.modal-backdrop')?.remove(); const p = product(a.dataset.id); if (p) productForm(p.companyId, p.id); } if (action === 'delete-product' && confirm('Remove this fragrance from the catalog?')) { state.products = state.products.filter(p => p.id !== a.dataset.id); save(); document.querySelector('.modal-backdrop')?.remove(); render(); toast('Fragrance removed'); } if (action === 'close') document.querySelector('.modal-backdrop')?.remove(); if (action === 'add-line') document.querySelector('#invoice-lines').insertAdjacentHTML('beforeend', lineHtml()); if (action === 'export-catalog') exportCatalog(a.dataset.company); if (action === 'export-catalog-pdf') exportCatalogPdf(a.dataset.company); if (action === 'export-customer') exportCustomer(a.dataset.id); if (action === 'invoice') invoicePrint(a.dataset.id); if (action === 'export-backup') { download(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), 'amf-backup.json'); }
+    if (action === 'reset-reminder-text') { const t = document.querySelector('#reminder-form [name="template"]'); if (t) t.value = DEFAULT_REMINDER_TEXT; } if (action === 'product-detail') productModal(a.dataset.id); if (action === 'add-product') productForm(a.dataset.company); if (action === 'edit-product') { document.querySelector('.modal-backdrop')?.remove(); const p = product(a.dataset.id); if (p) productForm(p.companyId, p.id); } if (action === 'delete-product' && confirm('Remove this fragrance from the catalog?')) { state.products = state.products.filter(p => p.id !== a.dataset.id); save(); document.querySelector('.modal-backdrop')?.remove(); render(); toast('Fragrance removed'); } if (action === 'close') document.querySelector('.modal-backdrop')?.remove(); if (action === 'add-line') document.querySelector('#invoice-lines').insertAdjacentHTML('beforeend', lineHtml()); if (action === 'export-catalog') exportCatalog(a.dataset.company); if (action === 'export-catalog-pdf') exportCatalogPdf(a.dataset.company); if (action === 'export-customer') exportCustomer(a.dataset.id); if (action === 'invoice') invoicePrint(a.dataset.id); if (action === 'export-backup') exportData();
   });
   document.addEventListener('submit', e => {
     e.preventDefault(); const f = e.target, data = Object.fromEntries(new FormData(f)), formId = f.getAttribute('id');
@@ -499,7 +711,15 @@
       state.settings.reminders = { schedule: parseSchedule(data.schedule).join(', '), repeatEvery: Math.max(0, Math.min(365, Math.floor(+data.repeatEvery || 0))), template: String(data.template).trim() };
       save(); render(); toast('Reminder settings saved');
     }
-    if (formId === 'companies-form') { companies.forEach(c => state.companyMeta[c.id] = { ...state.companyMeta[c.id], name: String(data[c.id] ?? '').trim() }); save(); render(); toast('Suppliers updated'); }
+    if (formId === 'supplier-add-form') {
+      const name = String(data.name || '').trim();
+      if (!name) return toast('Enter the supplier name');
+      if (allCompanies().some(c => supplierName(c.id).toLowerCase() === name.toLowerCase())) return toast('A supplier with that name already exists');
+      let n = 5; while (state.companyMeta[`company-${n}`]) n++;
+      state.companyMeta[`company-${n}`] = { name, note: String(data.note || '').trim() || 'Add supplier details' };
+      save(); render(); toast(`${name} added. Open Catalogs to add its fragrances`);
+    }
+    if (formId === 'companies-form') { allCompanies().forEach(c => state.companyMeta[c.id] = { ...state.companyMeta[c.id], name: String(data[c.id] ?? '').trim() }); save(); render(); toast('Suppliers updated'); }
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'product-search') {
@@ -546,4 +766,5 @@
   });
   window.addEventListener('storage', e => { if (e.key === KEY || e.key === null) { state = load(); document.documentElement.dataset.theme = state.settings.theme || 'light'; render(); } });
   render();
+  loadProjectData().finally(initDataFile);
 })();

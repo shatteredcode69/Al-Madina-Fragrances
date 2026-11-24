@@ -4,3 +4,7 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# Your private data files (customers and invoices). Keep these out of the repository.
+/amf-data*.json
+/amf-backup*.json

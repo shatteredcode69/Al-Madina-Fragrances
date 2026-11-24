@@ -182,10 +182,10 @@ test('Backups can be restored; invalid files are rejected', async () => {
   const w = boot(), d = w.document; await go(w, '#/dashboard');
   const choose = async (text) => { const input = d.querySelector('#backup-file'); Object.defineProperty(input, 'files', { value: [new w.File([text], 'b.json')], configurable: true }); input.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(80); };
   await choose('not json'); assert.match(d.querySelector('#toast').textContent, /not valid JSON/);
-  await choose('{"products":[]}'); assert.match(d.querySelector('#toast').textContent, /not an AMF backup/);
+  await choose('{"products":[]}'); assert.match(d.querySelector('#toast').textContent, /not an AMF data file/);
   assert.equal(stored(w).orders, undefined, 'a rejected file must not touch the data');
   await choose(backup);
-  assert.match(d.querySelector('#toast').textContent, /Backup restored/);
+  assert.match(d.querySelector('#toast').textContent, /Data file loaded/);
   assert.equal(stored(w).orders.length, 1); assert.equal(stored(w).customers[0].key, 'k-1');
 });
 
@@ -431,6 +431,125 @@ test('Older saved data without reminder settings still works', async () => {
   const w = boot({ settings: { theme: 'light', name: 'Old shop' }, customers: [{ id: 'c1', key: 'k', name: 'Abbas', phone: '03001234567' }], orders: [order('1', 5)], products: [] });
   await go(w, '#/reminders'); assert.match(w.document.querySelector('.reminder-row').textContent, /Due today|Overdue/);
   w.document.querySelector('[data-action="send-reminder"]').click(); await tick(); assert.match(decodeURIComponent(w.__lastLink), /from Old shop/);
+});
+
+
+// ───────────────────────────── One JSON data file, grouped by supplier ─────────────────────────────
+const JANAN_NAME = 'Janan sports جانان اسپورٹس';
+async function addFragrance(w, supplierId, values) {
+  await go(w, `#/catalog/${supplierId}`); await open(w, '[data-action="add-product"]'); await submit(w, '#product-form', values);
+}
+// Clicks an export button and returns the parsed JSON that would have been downloaded (plus the file name).
+async function exportJson(w, action = 'export-backup') {
+  let text = null; const RealBlob = w.Blob; w.Blob = function (parts, options) { text = parts[0]; return new RealBlob(parts, options); };
+  await go(w, '#/settings'); w.document.querySelector(`[data-action="${action}"]`).click(); w.Blob = RealBlob;
+  return { json: JSON.parse(text.replace(/^\uFEFF/, '')), fileName: w.__lastDownload, raw: text };
+}
+async function importText(w, text) {
+  const input = w.document.querySelector('#backup-file');
+  Object.defineProperty(input, 'files', { value: [new w.File([text], 'data.json')], configurable: true });
+  input.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(80);
+}
+
+test('The data file lists every supplier separately; a fragrance sold by two suppliers appears under each', async () => {
+  const w = boot(); await addFragrance(w, 'company-2', { name: JANAN_NAME, priceKg: '55000' }); await addFragrance(w, 'company-3', { name: JANAN_NAME, priceKg: '58000' });
+  const { json, fileName } = await exportJson(w);
+  assert.match(fileName, /^amf-data-\d{4}-\d{2}-\d{2}\.json$/);
+  assert.deepEqual([json.format, json.formatVersion, json.kind], ['amf-data', 3, 'full']);
+  assert.deepEqual(json.suppliers.map(s => s.id), ['arabian', 'company-2', 'company-3', 'company-4']);
+  assert.deepEqual(json.suppliers.map(s => s.fragrances.length), [206, 1, 1, 0]);
+  const holders = json.suppliers.filter(s => s.fragrances.some(f => f.name === JANAN_NAME));
+  assert.deepEqual(holders.map(s => s.id), ['arabian', 'company-2', 'company-3']);
+  const prices = holders.map(s => s.fragrances.find(f => f.name === JANAN_NAME).priceKg); assert.deepEqual(prices, [60000, 55000, 58000], 'each supplier keeps its own price');
+  const ids = json.suppliers.flatMap(s => s.fragrances.map(f => f.id)); assert.equal(new Set(ids).size, ids.length, 'ids are unique across the whole file');
+  assert.ok(json.suppliers.every(s => s.fragrances.every(f => !('companyId' in f))), 'the supplier is the parent, not a field');
+  assert.ok(Array.isArray(json.customers) && Array.isArray(json.orders) && json.settings.name);
+  assert.deepEqual(json.suppliers[1].fragrances[0], { ...json.suppliers[1].fragrances[0], price25g: 1375, perGram: 55, price100g: 5500, serial: 'CO-001' });
+});
+
+test('Export then import restores everything, including new fragrances, customers and invoices', async () => {
+  const a = boot(); await addFragrance(a, 'company-2', { name: 'Brand new oud', priceKg: '100000' }); await go(a, '#/billing'); await makeInvoice(a, { paid: 1600, key: 'k-1' });
+  const { raw } = await exportJson(a);
+  const b = boot(); await go(b, '#/dashboard'); await importText(b, raw);
+  const [sa, sb] = [stored(a), stored(b)];
+  assert.deepEqual(sb.products, sa.products); assert.deepEqual(sb.customers, sa.customers); assert.deepEqual(sb.orders, sa.orders);
+  await go(b, '#/catalog/company-2'); assert.match(b.document.querySelector('#product-grid').textContent, /Brand new oud/);
+});
+
+test('"Catalog only" leaves out customers and invoices; importing it keeps the receiver\'s own customers, invoices and settings', async () => {
+  const a = boot(); await addFragrance(a, 'company-4', { name: 'Catalog only oud', priceKg: '40000' });
+  const { json, raw, fileName } = await exportJson(a, 'export-catalog-json');
+  assert.match(fileName, /^amf-catalog-/); assert.equal(json.kind, 'catalog'); assert.ok(!('customers' in json) && !('orders' in json) && !('settings' in json));
+  const b = boot(withCustomer('0300-1234567', { orders: [order('1', 2)] })), d = b.document; await go(b, '#/dashboard');
+  await importText(b, raw);
+  assert.match(d.querySelector('#toast').textContent, /Catalogs loaded/);
+  assert.equal(stored(b).customers.length, 1); assert.equal(stored(b).orders.length, 1);
+  assert.ok(stored(b).products.some(p => p.name === 'Catalog only oud' && p.companyId === 'company-4'));
+});
+
+test('Older flat backups can still be imported (and are re-exported in the new format)', async () => {
+  const legacy = JSON.stringify({ version: 2, settings: { name: 'Old shop', theme: 'light' }, companyMeta: {}, products: [{ id: 'arabian-1', companyId: 'arabian', name: 'Old one', serial: 'AR-001', priceKg: 1000 }, { id: 'company-2-x', companyId: 'company-2', name: 'Old two', serial: 'CO-001', priceKg: 2000 }], customers: [], orders: [] });
+  const w = boot(); await go(w, '#/dashboard'); await importText(w, legacy);
+  assert.equal(stored(w).products.length, 2);
+  const { json } = await exportJson(w); assert.deepEqual(json.suppliers.map(s => s.fragrances.length), [1, 1, 0, 0]);
+});
+
+test('Broken data files are refused with a clear message and change nothing', async () => {
+  const w = boot(), d = w.document; await go(w, '#/dashboard');
+  const bad = {
+    'not json': ['{nope', /not valid JSON/],
+    'an array': ['[]', /not an AMF data file/],
+    'duplicate fragrance ids': [JSON.stringify({ suppliers: [{ id: 'arabian', fragrances: [{ id: 'x' }] }, { id: 'company-2', fragrances: [{ id: 'x' }] }], kind: 'catalog' }), /"x" appears twice/],
+    'supplier without a list': [JSON.stringify({ suppliers: [{ id: 'arabian' }] }), /supplier in that file is malformed/],
+    'fragrance without id': [JSON.stringify({ suppliers: [{ id: 'arabian', name: 'A', fragrances: [{ name: 'no id' }] }] }), /has no id/],
+    'supplier twice': [JSON.stringify({ suppliers: [{ id: 'arabian', fragrances: [] }, { id: 'arabian', fragrances: [] }] }), /appears twice/],
+    'full file without customers': [JSON.stringify({ kind: 'full', suppliers: [{ id: 'arabian', fragrances: [] }] }), /needs both customers and orders/],
+    'bad customers': [JSON.stringify({ suppliers: [], customers: [{ nope: 1 }], orders: [] }), /customers in that file are malformed/]
+  };
+  for (const [label, [text, expected]] of Object.entries(bad)) { await importText(w, text); assert.match(d.querySelector('#toast').textContent, expected, label); }
+  assert.equal(stored(w).products, undefined, 'nothing was imported');
+});
+
+test('Suppliers beyond the first four can be added, renamed and removed; each keeps its own fragrances', async () => {
+  const w = boot(), d = w.document; await go(w, '#/settings');
+  await submit(w, '#supplier-add-form', { name: 'Zaki Perfumes', note: 'Made in France' });
+  assert.equal(stored(w).companyMeta['company-5'].name, 'Zaki Perfumes');
+  await submit(w, '#supplier-add-form', { name: 'zaki perfumes' }); assert.match(d.querySelector('#toast').textContent, /already exists/);
+  await submit(w, '#supplier-add-form', { name: 'Second extra' }); assert.equal(stored(w).companyMeta['company-6'].name, 'Second extra');
+  await go(w, '#/catalog/company-5');
+  assert.equal(d.querySelectorAll('.company-switcher a').length, 6); assert.match(d.querySelector('.catalog-head h2').textContent, /Zaki Perfumes/);
+  assert.match(d.querySelector('.catalog-head .eyebrow').textContent, /Made in France/);
+  await open(w, '[data-action="add-product"]'); await submit(w, '#product-form', { name: 'Zaki oud', priceKg: '80000' });
+  assert.equal(stored(w).products.at(-1).companyId, 'company-5');
+  await open(w, '[data-action="share-list"]'); assert.ok([...d.querySelectorAll('#share-supplier option')].some(o => o.textContent === 'Zaki Perfumes')); d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await go(w, '#/billing'); await open(w, '[data-action="quick-order"]'); assert.ok([...d.querySelectorAll('select[name=companyId] option')].some(o => o.textContent === 'Zaki Perfumes'));
+  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const { json } = await exportJson(w); assert.deepEqual(json.suppliers.map(s => s.id), ['arabian', 'company-2', 'company-3', 'company-4', 'company-5', 'company-6']);
+  assert.equal(json.suppliers[4].fragrances[0].name, 'Zaki oud'); assert.equal(json.suppliers[4].note, 'Made in France');
+  assert.equal(d.querySelectorAll('[data-action="remove-supplier"]').length, 2, 'only added suppliers can be removed');
+  d.querySelector('[data-action="remove-supplier"][data-id="company-5"]').click(); assert.match(d.querySelector('#toast').textContent, /Remove its 1 fragrance first/);
+  d.querySelector('[data-action="remove-supplier"][data-id="company-6"]').click(); await tick(); assert.equal(stored(w).companyMeta['company-6'], undefined);
+});
+
+test('A data file with a supplier the app has not seen creates that supplier; fragrances never get lost on export', async () => {
+  const file = JSON.stringify({ format: 'amf-data', formatVersion: 3, kind: 'catalog', suppliers: [{ id: 'company-9', name: 'Nine Perfumes', note: 'Dubai', fragrances: [{ id: 'company-9-a', name: 'Nine oud', priceKg: 90000, serial: 'NI-001' }] }] });
+  const w = boot(), d = w.document; await go(w, '#/dashboard'); await importText(w, file);
+  await go(w, '#/catalog/company-9'); assert.match(d.querySelector('.catalog-head h2').textContent, /Nine Perfumes/); assert.match(d.querySelector('#product-grid').textContent, /Nine oud/);
+  const orphan = boot({ products: [{ id: 'ghost-1', companyId: 'ghost', name: 'Orphan oud', serial: 'GH-001', priceKg: 1 }], customers: [], orders: [] });
+  const { json } = await exportJson(orphan);
+  assert.deepEqual(json.suppliers.find(s => s.id === 'ghost')?.fragrances.map(f => f.name), ['Orphan oud']);
+});
+
+test('Every save is time-stamped (used to decide which copy is newer)', async () => {
+  const w = boot(); await addFragrance(w, 'arabian', { name: 'Stamped', priceKg: '1000' });
+  const at = Date.parse(stored(w).savedAt); assert.ok(Date.now() - at < 5000 && at <= Date.now());
+  const { json } = await exportJson(w); assert.equal(json.savedAt, stored(w).savedAt);
+});
+
+test('Without the File System Access API the settings say so and offer downloads instead', async () => {
+  const w = boot(); await go(w, '#/settings');
+  assert.match(w.document.querySelector('#file-panel').textContent, /cannot save to a file automatically/);
+  for (const a of ['export-backup', 'export-catalog-json', 'import-backup']) assert.ok(w.document.querySelector(`.wide-panel [data-action="${a}"]`));
 });
 
 (async () => {

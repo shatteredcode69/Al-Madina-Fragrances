@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+- **One JSON data file, grouped by supplier.** Export / import use a single `amf-data.json` in which every supplier
+  has its own `fragrances` list; the same fragrance sold by two suppliers is listed under each, separately.
+  "Download catalog only" leaves out customers, invoices and settings. Older flat backups still import.
+- **Auto-save to a real file** (Chrome, Edge, Opera): link a data file once and every change is written to it.
+  Automatic recovery from the file when browser storage is cleared, a Reconnect banner when permission is needed,
+  and a prompt when the file is newer than the browser's data.
+- **More than four suppliers:** add, rename and remove suppliers in Settings.
+- **Project catalog:** a catalog-only `data/amf-data.json` is used as the starting data for browsers with no saved data.
+- Every save is time-stamped; the sidebar shows when data is being auto-saved to a file.
+
+### Fixed
+- **Dark mode: fragrance names and prices were black on the dark cards** (contrast 1.35:1) because the card is a
+  button with a default black text colour. Colours are now explicit, native controls follow the dark theme,
+  form labels and supplier initials meet contrast guidelines.
+- Browser-storage connections for the remembered data file are closed after use.
+
 ## 1.1.0
 
 ### Added
